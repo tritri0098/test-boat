@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'" />
+  <title>Three.js Ocean SlideDeck</title>
+  <link rel="stylesheet" href="./src/styles.css" />
+</head>
+<body>
+  <main class="app-shell">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Three.js + GSAP</p>
+        <h1>Ocean SlideDeck</h1>
+        <p class="lede">Scène 3D modulaire : mer animée, météo, caméra live, plusieurs bateaux et chargement GLB/GLTF/OBJ.</p>
+      </div>
+      <div id="webgl-status" class="status-pill">Initialisation…</div>
+    </section>
+
+    <section class="viewer-card">
+      <div id="viewport" class="viewport" aria-label="Scène 3D de mer et bateaux">
+        <div class="scene-hud">
+          <strong id="scene-title">Ciel clair</strong>
+          <span id="scene-subtitle">Caméra libre</span>
+        </div>
+      </div>
+
+      <div class="transport">
+        <button id="prev-scene" type="button">← Scène précédente</button>
+        <button id="next-scene" type="button" class="primary">Scène suivante →</button>
+        <button id="pause" type="button">Pause</button>
+      </div>
+    </section>
+
+    <section class="panel-grid">
+      <section class="panel">
+        <div class="panel-heading">
+          <h2>Scènes</h2>
+          <span>GSAP interpole les paramètres</span>
+        </div>
+        <div class="row">
+          <button id="scene-calm" type="button">☀️ Calme</button>
+          <button id="scene-storm" type="button">⛈️ Tempête</button>
+          <button id="scene-cinematic" type="button">🎥 Cinématique</button>
+        </div>
+        <div class="telemetry">
+          <div><small>Vagues</small><b id="wave-value">0,2 m</b></div>
+          <div><small>Vent</small><b id="wind-value">3 m/s</b></div>
+          <div><small>Pluie</small><b id="rain-value">0 %</b></div>
+          <div><small>Bateaux</small><b id="boat-count">1</b></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <h2>Caméra live</h2>
+          <span>OrbitControls + réglages numériques</span>
+        </div>
+        <label>Mode
+          <select id="camera-mode">
+            <option value="orbit">Orbit / libre</option>
+            <option value="follow">Suivre le bateau actif</option>
+          </select>
+        </label>
+        <div class="slider-grid" id="camera-sliders"></div>
+        <div class="row">
+          <button id="apply-camera" type="button">Appliquer</button>
+          <button id="reset-camera" type="button">Réinitialiser</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <h2>Bateaux</h2>
+          <span>Procédural, GLB/GLTF ou OBJ</span>
+        </div>
+        <label>Bateau actif
+          <select id="boat-select"></select>
+        </label>
+        <div class="row">
+          <button id="add-procedural" type="button">+ Bateau procédural</button>
+          <button id="load-demo-obj" type="button">Charger demo_boat.obj</button>
+        </div>
+        <label class="file-label">Charger un fichier local (.glb, .gltf, .obj)
+          <input id="model-file" type="file" accept=".glb,.gltf,.obj" />
+        </label>
+        <div class="slider-grid" id="boat-sliders"></div>
+        <div class="row">
+          <button id="apply-boat" type="button">Appliquer position</button>
+          <button id="remove-boat" type="button" class="danger">Supprimer</button>
+        </div>
+        <p class="hint">Pour un modèle avec textures, préfère <b>.glb</b>. Un OBJ fonctionne aussi ; un OBJ+MTL externe doit être chargé via l'API dans le code.</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <h2>Météo live</h2>
+          <span>Modifie directement l'état courant</span>
+        </div>
+        <div class="slider-grid" id="weather-sliders"></div>
+      </section>
+    </section>
+
+    <section class="panel code-help">
+      <div class="panel-heading">
+        <h2>Points d'entrée faciles à modifier</h2>
+        <span>src/main.js</span>
+      </div>
+      <pre><code>// Ajouter un bateau GLB
+const boat = await world.addBoatFromUrl({
+  id: "rescue",
+  url: new URL("../assets/models/rescue.glb", import.meta.url).href,
+  position: [5, 0, -10],
+  scale: 0.8
+});
+
+// Déplacer la caméra
+world.cameraController.setPose({
+  position: [4, 2.5, 8],
+  target: [0, 0.8, -5]
+});
+
+// Ajouter une scène animée
+slides.addScene({
+  id: "heavy-storm",
+  weather: { storm: 1, rain: 1, wind: 24 },
+  camera: { position: [2, 1.6, 7], target: [0, 0.8, -5] }
+});</code></pre>
+    </section>
+  </main>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
+      "gsap": "https://cdn.jsdelivr.net/npm/gsap@3.13.0/+esm"
+    }
+  }
+  </script>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>
