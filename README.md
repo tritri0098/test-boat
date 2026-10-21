@@ -19,20 +19,41 @@ Deux vues sont disponibles :
 - **Éditeur** : caméra OrbitControls, gizmos de translation/rotation/échelle et sélection des objets ;
 - **Vue caméra** : rendu depuis la caméra cinématique active choisie par les coupes de la timeline.
 
-La timeline peut contenir plusieurs caméras. Chaque caméra est un objet éditable avec ses propres keyframes. Un keyframe de caméra enregistre :
-
-- position ;
-- rotation ;
-- focale en mm ;
-- zoom ;
-- distance de mise au point ;
-- aperture du pass DOF ;
-- blur maximal ;
-- activation de la profondeur de champ.
+La timeline peut contenir plusieurs caméras. Chaque caméra est un objet éditable avec ses propres keyframes. Un keyframe de caméra enregistre position, rotation, focale en mm, zoom, distance de mise au point, aperture du pass DOF, blur maximal et activation de la profondeur de champ.
 
 La piste spéciale **CAM CUT** choisit la caméra utilisée à chaque instant. Ajoute une coupe au playhead avec **Cut au playhead**.
 
 La profondeur de champ utilise `BokehPass` de Three.js et n'est calculée que dans la vue cinématique lorsqu'elle est activée pour la caméra courante.
+
+## Keyframes éditables
+
+Chaque keyframe possède maintenant un identifiant stable. Un clic sur le losange d'une keyframe sélectionne **cette keyframe précise et uniquement celle de sa piste**.
+
+Pendant cette sélection :
+
+1. modifie la position, la rotation ou l'échelle avec le gizmo ou l'inspecteur ;
+2. pour une caméra, modifie aussi la focale, le zoom et la profondeur de champ ;
+3. tu peux déplacer le playhead vers un autre temps pour déplacer cette keyframe dans la timeline ;
+4. change éventuellement son interpolation ;
+5. le bouton principal devient **Enregistrer cette keyframe**.
+
+La sauvegarde met à jour la keyframe sélectionnée **en place** : aucune autre keyframe de l'objet, et aucune piste d'un autre objet, n'est modifiée.
+
+Si une autre keyframe du même objet existe déjà exactement au temps de destination, l'éditeur refuse la collision au lieu d'écraser silencieusement cette autre keyframe.
+
+## Priorité des liaisons
+
+L'évaluation de la timeline est volontairement séparée en couches :
+
+```text
+1. keyframes / interpolation des objets
+2. liaisons temporaires et contraintes
+3. sélection de la caméra de rendu
+```
+
+Les liaisons sont donc toujours appliquées **après** les keyframes et ont priorité sur elles pendant leur intervalle actif.
+
+Une keyframe d'un objet lié reste éditable comme animation de base, mais le rendu final de cet objet suit quand même la liaison sur l'intervalle concerné. En cas de chaîne de liaisons, les cibles liées sont résolues avant leurs enfants. Si plusieurs liaisons actives pilotent le même enfant, la dernière créée est appliquée en dernier et possède donc la priorité finale.
 
 ## Timeline objet
 
@@ -40,6 +61,7 @@ La profondeur de champ utilise `BokehPass` de Three.js et n'est calculée que da
 - gizmos Three.js pour translation, rotation et échelle ;
 - timeline visuelle multi-objets ;
 - keyframes position + quaternion + échelle ;
+- édition directe des keyframes existantes ;
 - interpolation automatique `smooth`, `linear`, `easeIn`, `easeOut` ou `step` ;
 - lecture, scrubbing, boucle et durée réglable ;
 - export/import JSON ;
@@ -59,14 +81,7 @@ La timeline possède une piste **FX**.
 
 ### Explosion
 
-Une explosion peut être :
-
-- placée en coordonnées monde ;
-- attachée à un modèle avec un offset local ;
-- limitée à un intervalle de temps ;
-- réglée en taille et intensité.
-
-L'effet est procédural : sprite lumineux, particules et lumière ponctuelle. Aucun asset externe n'est téléchargé.
+Une explosion peut être placée en coordonnées monde, attachée à un modèle avec un offset local, limitée à un intervalle de temps, et réglée en taille et intensité. L'effet est procédural : sprite lumineux, particules et lumière ponctuelle. Aucun asset externe n'est téléchargé.
 
 ### Flamme de moteur fusée
 
@@ -96,24 +111,32 @@ Pour OBJ, sélectionne `.obj`, `.mtl` et textures ensemble.
 
 ## Format timeline JSON
 
-Le format courant est `version: 2` :
+Le format courant est `version: 3`. La version 3 ajoute un identifiant stable aux keyframes pour permettre leur édition ciblée :
 
 ```json
 {
-  "version": 2,
+  "version": 3,
   "duration": 12,
   "loop": false,
-  "tracks": {},
+  "tracks": {
+    "main-boat": [
+      {
+        "id": "key-...",
+        "time": 0,
+        "position": [0, 0, -6],
+        "quaternion": [0, 0, 0, 1],
+        "scale": [1, 1, 1],
+        "interpolation": "smooth"
+      }
+    ]
+  },
   "bindings": [],
-  "cameraCuts": [
-    { "id": "...", "cameraId": "camera-A", "time": 0 },
-    { "id": "...", "cameraId": "camera-B", "time": 6 }
-  ],
+  "cameraCuts": [],
   "effects": []
 }
 ```
 
-Les timelines `version: 1` restent importables ; les nouvelles pistes sont simplement initialisées vides.
+Les timelines `version: 1` et `version: 2` restent importables. Des identifiants de keyframes sont générés automatiquement à l'import.
 
 ## Architecture
 
