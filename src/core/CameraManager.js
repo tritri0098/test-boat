@@ -29,7 +29,9 @@ export class CinematicCameraActor {
     this.manager=manager;
     this.id=id;
     this.kind='camera';
-    this.object=new THREE.PerspectiveCamera(50, manager.aspect, .05, 1000);
+    // Large far plane: the quadtree ocean can really occupy a huge world-space
+    // surface instead of being a small patch glued to the screen/camera.
+    this.object=new THREE.PerspectiveCamera(50, manager.aspect, .05, 800000);
     this.object.name=id;
     this.object.userData.editorId=id;
     this.object.userData.editorKind='camera';
