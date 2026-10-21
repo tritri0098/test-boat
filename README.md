@@ -1,178 +1,109 @@
-# Three.js Ocean SlideDeck — serveur Python
+# Ocean Scene Creator
 
-Version sans Vite et sans npm du projet de démonstration 3D.
+Éditeur de scène 3D Three.js pour créer des séquences animées sur une mer procédurale, sans Vite ni npm à l'exécution.
 
-## Démarrage
-
-Aucune dépendance Python externe n'est nécessaire.
-
-Sous Windows :
-
-```powershell
-py server.py
-```
-
-Sous Linux / macOS :
+## Lancer
 
 ```bash
 python3 server.py
 ```
 
-Puis ouvrir :
+Puis ouvre `http://127.0.0.1:8000/`.
 
-```text
-http://127.0.0.1:8000/
-```
+Le serveur Python n'effectue aucun appel réseau sortant. Le navigateur ne contacte que `cdn.jsdelivr.net` pour les modules JavaScript Three.js/GSAP réellement utilisés. Les modèles, textures et fichiers de timeline restent locaux ou servis par le même serveur.
 
-Pour changer le port :
+## Ce que fait l'éditeur
 
-```bash
-python3 server.py --port 8080
-```
+- sélection d'un objet depuis la liste ou directement dans la vue 3D ;
+- gizmos Three.js pour translation, rotation et échelle ;
+- timeline visuelle multi-objets ;
+- keyframes de position + rotation + échelle ;
+- interpolation automatique `smooth`, `linear`, `easeIn`, `easeOut` ou `step` ;
+- lecture, scrubbing, boucle et durée réglable ;
+- export/import de la timeline en JSON ;
+- liaison temporaire d'un objet à la position d'un autre sur un intervalle donné ;
+- choix des axes X/Y/Z à suivre ;
+- suivi optionnel de la rotation ;
+- fondu d'attache/détache pour éviter les sauts ;
+- objets flottants (bateaux) ou objets statiques ;
+- chargement GLB/GLTF/OBJ.
 
-Le serveur écoute par défaut sur `0.0.0.0`, donc un iPhone présent sur le même réseau local peut ouvrir :
+## GLB / textures
 
-```text
-http://IP_LOCALE_DU_PC:8000/
-```
+`GLTFLoader` conserve les matériaux PBR et les textures du GLB. Le chargeur ne remplace plus les matériaux glTF lors de la préparation du modèle. Les textures obtiennent aussi une anisotropie adaptée au GPU.
 
-Le serveur Python ne cherche pas automatiquement ton IP et ne fait aucun appel réseau sortant.
+Pour un `.glb`, sélectionne simplement le fichier. Les textures embarquées sont chargées avec lui.
 
-## Réseau / confidentialité
+Pour un `.gltf` avec ressources externes, sélectionne **en une fois** le `.gltf`, son `.bin` et ses images. L'éditeur résout leurs chemins via des `blob:` URLs locales, sans aller chercher ces assets sur Internet.
 
-Le projet n'utilise ni Vite, ni npm à l'exécution, ni analytics, ni télémétrie, ni WebSocket.
+Pour un OBJ, tu peux de la même manière sélectionner `.obj`, `.mtl` et textures ensemble.
 
-Le navigateur peut contacter **uniquement `cdn.jsdelivr.net`** pour télécharger les scripts JavaScript suivants :
+> Les GLB utilisant des extensions de compression qui nécessitent un décodeur externe (par exemple certaines variantes Draco/KTX2) ne sont pas activés dans cette version, afin de ne pas ajouter d'autres téléchargements réseau que les scripts JS autorisés.
 
-- Three.js `0.180.0` ;
-- les addons Three.js réellement importés (`OrbitControls`, `GLTFLoader`, `OBJLoader`, `MTLLoader`) ;
-- GSAP `3.13.0`.
+## Utilisation rapide
 
-Tous les autres fichiers — HTML, CSS, JS du projet, modèles `.obj`, `.mtl`, `.glb`, `.gltf` et leurs ressources — sont servis par le serveur Python local.
+1. Charge ou crée un objet.
+2. Sélectionne-le dans la liste ou touche/clique le modèle dans la scène.
+3. Place le curseur de timeline au temps voulu.
+4. Déplace/rotate/scale l'objet avec le gizmo.
+5. Clique **◆ Keyframe**.
+6. Recommence à un autre instant : l'interpolation est calculée automatiquement.
 
-`index.html` contient une Content Security Policy qui limite les connexions sortantes à :
+### Liaison temporaire
 
-```text
-'self'
-https://cdn.jsdelivr.net
-```
+Pour faire suivre `boat-B` par `boat-A` de 2 s à 5 s :
 
-Ainsi, une ressource 3D qui essaierait de charger une URL externe depuis un autre domaine sera bloquée. `ModelLoader` refuse en plus explicitement les URL de modèles qui ne sont pas de même origine.
+1. sélectionne `boat-B` ;
+2. choisis `boat-A` comme cible ;
+3. mets début `2`, fin `5` ;
+4. choisis les axes à suivre ;
+5. règle le fondu, par exemple `0.25 s` ;
+6. clique **Créer la liaison**.
 
-> Un fichier `.gltf` ou `.mtl` peut référencer des fichiers associés. Pour rester dans cette politique, place aussi ces fichiers dans le projet et utilise des chemins relatifs. Un `.glb` est généralement plus simple car les ressources peuvent être intégrées dans un fichier unique.
+L'offset spatial courant entre les deux objets est mémorisé. Pendant l'intervalle, la liaison est appliquée après l'interpolation des keyframes. À l'entrée et à la sortie, le poids de la liaison est interpolé pour obtenir une transition douce.
 
-## Arborescence
+## Format JSON de timeline
 
-```text
-./
-├── server.py
-├── index.html
-├── README.md
-├── assets/
-│   └── models/
-│       └── demo_boat.obj
-└── src/
-    ├── main.js
-    ├── styles.css
-    ├── core/
-    │   ├── Boat.js
-    │   ├── CameraController.js
-    │   ├── ModelLoader.js
-    │   ├── Ocean.js
-    │   ├── OceanWorld.js
-    │   ├── Rain.js
-    │   ├── SlideDeck.js
-    │   └── Weather.js
-    └── ui/
-        └── controls.js
-```
+Exemple simplifié :
 
-## Dépendances JS sans Vite
-
-`index.html` utilise un `importmap` :
-
-```html
-<script type="importmap">
+```json
 {
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
-    "gsap": "https://cdn.jsdelivr.net/npm/gsap@3.13.0/+esm"
-  }
+  "version": 1,
+  "duration": 12,
+  "loop": false,
+  "tracks": {
+    "main-boat": [
+      {
+        "time": 0,
+        "position": [3.1, 0, -5.4],
+        "quaternion": [0, 0, 0, 1],
+        "scale": [0.94, 0.94, 0.94],
+        "interpolation": "smooth"
+      }
+    ]
+  },
+  "bindings": []
 }
-</script>
 ```
 
-Les sources peuvent donc garder des imports propres :
-
-```js
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { gsap } from 'gsap';
-```
-
-Le navigateur résout ces noms grâce à l'import map ; aucun bundler n'est nécessaire.
-
-## Ajouter un modèle GLB
-
-Place par exemple :
+## Architecture
 
 ```text
-assets/models/yacht.glb
+src/
+├── main.js
+├── styles.css
+├── core/
+│   ├── Boat.js
+│   ├── CameraController.js
+│   ├── ModelLoader.js
+│   ├── Ocean.js
+│   ├── OceanWorld.js
+│   ├── Rain.js
+│   ├── SceneActor.js
+│   ├── SceneTimeline.js
+│   └── Weather.js
+└── editor/
+    └── SceneEditor.js
 ```
 
-Puis dans `src/main.js` :
-
-```js
-const ASSETS_BASE = new URL('../assets/', import.meta.url);
-
-await world.addBoatFromUrl({
-  id: 'yacht',
-  url: new URL('models/yacht.glb', ASSETS_BASE).href,
-  position: [4, 0, -8],
-  scale: 0.8
-});
-```
-
-## Ajouter un OBJ
-
-```js
-await world.addBoatFromUrl({
-  id: 'obj-boat',
-  url: new URL('models/boat.obj', ASSETS_BASE).href,
-  position: [-3, 0, -8],
-  scale: 1
-});
-```
-
-OBJ + MTL :
-
-```js
-await world.addBoatFromUrl({
-  id: 'obj-mtl',
-  url: new URL('models/boat.obj', ASSETS_BASE).href,
-  mtlUrl: new URL('models/boat.mtl', ASSETS_BASE).href
-});
-```
-
-## Intégration à ton autre serveur Python
-
-Les liens du projet sont relatifs, donc tu peux aussi copier tout ce dossier dans une sous-arborescence déjà servie par ton autre serveur :
-
-```text
-mon-projet/
-├── server.py
-├── ...
-└── ocean/
-    ├── index.html
-    ├── src/
-    └── assets/
-```
-
-Si la racine `mon-projet/` est servie sur le port 8000, la démo sera alors accessible à :
-
-```text
-http://127.0.0.1:8000/ocean/
-```
-
-Tu n'as pas besoin de lancer le `server.py` fourni dans ce cas.
+`SceneTimeline` est indépendant du rendu de l'océan : il travaille sur les `THREE.Object3D` exposés par `OceanWorld`. Les bateaux utilisent un root de timeline séparé du root de flottabilité afin que l'animation artistique et la réaction aux vagues puissent coexister.
