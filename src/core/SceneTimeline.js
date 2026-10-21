@@ -1,186 +1,250 @@
 import * as THREE from 'three';
 
-const clamp01 = (v) => Math.max(0, Math.min(1, v));
-const smooth = (v) => { v=clamp01(v); return v*v*(3-2*v); };
+const clamp01=(v)=>Math.max(0,Math.min(1,v));
+const smooth=(v)=>{v=clamp01(v);return v*v*(3-2*v);};
+const lerp=(a,b,t)=>THREE.MathUtils.lerp(Number(a)||0,Number(b)||0,t);
 
-function snapshot(object) {
-  return {
-    position: object.position.toArray(),
-    quaternion: object.quaternion.toArray(),
-    scale: object.scale.toArray()
+function snapshot(object){
+  const out={
+    position:object.position.toArray(),
+    quaternion:object.quaternion.toArray(),
+    scale:object.scale.toArray()
   };
+  if(object.isPerspectiveCamera){
+    const s=object.userData.cameraSettings||{};
+    out.camera={
+      focalLength:object.getFocalLength(),
+      zoom:object.zoom,
+      focusDistance:Number(s.focusDistance)||12,
+      aperture:Number(s.aperture)||0,
+      maxBlur:Number(s.maxBlur)||0,
+      dofEnabled:Boolean(s.dofEnabled)
+    };
+  }
+  return out;
 }
 
-function easing(name, t) {
-  if (name === 'step') return t < 1 ? 0 : 1;
-  if (name === 'smooth') return smooth(t);
-  if (name === 'easeIn') return t*t;
-  if (name === 'easeOut') return 1-(1-t)*(1-t);
+function easing(name,t){
+  if(name==='step')return t<1?0:1;
+  if(name==='smooth')return smooth(t);
+  if(name==='easeIn')return t*t;
+  if(name==='easeOut')return 1-(1-t)*(1-t);
   return t;
 }
 
-export class SceneTimeline {
-  constructor({ resolveObject, duration=12, loop=false }={}) {
-    this.resolveObject = resolveObject;
-    this.duration = duration;
-    this.loop = loop;
-    this.time = 0;
-    this.playing = false;
-    this.rate = 1;
-    this.tracks = new Map();
-    this.bindings = [];
-    this.onChange = null;
-    this.onTime = null;
+function cloneFrame(frame){
+  return {
+    ...frame,
+    position:[...(frame.position||[0,0,0])],
+    quaternion:[...(frame.quaternion||[0,0,0,1])],
+    scale:[...(frame.scale||[1,1,1])],
+    camera:frame.camera?{...frame.camera}:undefined
+  };
+}
+
+export class SceneTimeline{
+  constructor({resolveObject,duration=12,loop=false}={}){
+    this.resolveObject=resolveObject;
+    this.duration=duration;
+    this.loop=loop;
+    this.time=0;
+    this.playing=false;
+    this.rate=1;
+    this.tracks=new Map();
+    this.bindings=[];
+    this.cameraCuts=[];
+    this.effects=[];
+    this.onChange=null;
+    this.onTime=null;
+    this.onCameraCut=null;
+    this._lastCameraId=null;
   }
 
-  ensureTrack(id) {
-    if (!this.tracks.has(id)) this.tracks.set(id, []);
-    return this.tracks.get(id);
+  ensureTrack(id){if(!this.tracks.has(id))this.tracks.set(id,[]);return this.tracks.get(id);}
+
+  captureKeyframe(id,time=this.time,{interpolation='smooth'}={}){
+    const object=this.resolveObject(id);
+    if(!object)throw new Error(`Objet introuvable: ${id}`);
+    return this.addKeyframe(id,{time,...snapshot(object),interpolation});
   }
 
-  captureKeyframe(id, time=this.time, { interpolation='smooth' }={}) {
-    const object = this.resolveObject(id);
-    if (!object) throw new Error(`Objet introuvable: ${id}`);
-    return this.addKeyframe(id, { time, ...snapshot(object), interpolation });
-  }
-
-  addKeyframe(id, frame) {
-    const track = this.ensureTrack(id);
-    const normalized = {
-      time: Math.max(0, Math.min(this.duration, Number(frame.time) || 0)),
-      position: [...frame.position],
-      quaternion: [...frame.quaternion],
-      scale: [...frame.scale],
-      interpolation: frame.interpolation || 'smooth'
+  addKeyframe(id,frame){
+    const track=this.ensureTrack(id);
+    const normalized={
+      time:Math.max(0,Math.min(this.duration,Number(frame.time)||0)),
+      position:[...(frame.position||[0,0,0])],
+      quaternion:[...(frame.quaternion||[0,0,0,1])],
+      scale:[...(frame.scale||[1,1,1])],
+      interpolation:frame.interpolation||'smooth',
+      camera:frame.camera?{...frame.camera}:undefined
     };
-    const existing = track.findIndex(k => Math.abs(k.time-normalized.time) < 1e-4);
-    if (existing >= 0) track[existing] = normalized; else track.push(normalized);
+    const existing=track.findIndex(k=>Math.abs(k.time-normalized.time)<1e-4);
+    if(existing>=0)track[existing]=normalized;else track.push(normalized);
     track.sort((a,b)=>a.time-b.time);
     this.onChange?.();
     return normalized;
   }
 
-  removeKeyframe(id, time, tolerance=0.12) {
-    const track=this.tracks.get(id); if(!track) return false;
-    const index=track.findIndex(k=>Math.abs(k.time-time)<=tolerance);
-    if(index<0) return false;
-    track.splice(index,1); this.onChange?.(); return true;
+  removeKeyframe(id,time,tolerance=.12){
+    const track=this.tracks.get(id);if(!track)return false;
+    const index=track.findIndex(k=>Math.abs(k.time-time)<=tolerance);if(index<0)return false;
+    track.splice(index,1);this.onChange?.();return true;
   }
 
-  addBinding({ childId, targetId, start=this.time, end=this.time+2, blend=0.25, axes=[true,true,true], followRotation=false, offset=null }={}) {
-    if (!childId || !targetId || childId===targetId) throw new Error('Choisis deux objets différents.');
-    const child=this.resolveObject(childId), target=this.resolveObject(targetId);
-    if(!child||!target) throw new Error('Objet de liaison introuvable.');
-    const childWorld=new THREE.Vector3(), targetWorld=new THREE.Vector3();
-    child.getWorldPosition(childWorld); target.getWorldPosition(targetWorld);
+  addBinding({childId,targetId,start=this.time,end=this.time+2,blend=.25,axes=[true,true,true],followRotation=false,offset=null}={}){
+    if(!childId||!targetId||childId===targetId)throw new Error('Choisis deux objets différents.');
+    const child=this.resolveObject(childId),target=this.resolveObject(targetId);
+    if(!child||!target)throw new Error('Objet de liaison introuvable.');
+    const childWorld=new THREE.Vector3(),targetWorld=new THREE.Vector3();
+    child.getWorldPosition(childWorld);target.getWorldPosition(targetWorld);
     const binding={
-      id: crypto.randomUUID?.() ?? `binding-${Date.now()}-${Math.random()}`,
+      id:crypto.randomUUID?.()??`binding-${Date.now()}-${Math.random()}`,
       childId,targetId,
-      start:Math.max(0,Number(start)||0), end:Math.min(this.duration,Number(end)||0),
-      blend:Math.max(0,Number(blend)||0), axes:[...axes], followRotation:Boolean(followRotation),
-      offset: offset ? [...offset] : childWorld.sub(targetWorld).toArray()
+      start:Math.max(0,Number(start)||0),end:Math.min(this.duration,Number(end)||0),
+      blend:Math.max(0,Number(blend)||0),axes:[...axes],followRotation:Boolean(followRotation),
+      offset:offset?[...offset]:childWorld.sub(targetWorld).toArray()
     };
-    if(binding.end<=binding.start) throw new Error('La fin de liaison doit être après le début.');
-    this.bindings.push(binding); this.onChange?.(); return binding;
+    if(binding.end<=binding.start)throw new Error('La fin de liaison doit être après le début.');
+    this.bindings.push(binding);this.onChange?.();return binding;
   }
 
-  removeBinding(id) {
-    const n=this.bindings.length;
-    this.bindings=this.bindings.filter(b=>b.id!==id);
-    if(this.bindings.length!==n) this.onChange?.();
+  removeBinding(id){const n=this.bindings.length;this.bindings=this.bindings.filter(b=>b.id!==id);if(this.bindings.length!==n)this.onChange?.();}
+
+  addCameraCut(cameraId,time=this.time){
+    const object=this.resolveObject(cameraId);
+    if(!object?.isPerspectiveCamera)throw new Error('La coupe doit cibler une caméra cinématique.');
+    const cut={id:crypto.randomUUID?.()??`cut-${Date.now()}-${Math.random()}`,cameraId,time:Math.max(0,Math.min(this.duration,Number(time)||0))};
+    const existing=this.cameraCuts.findIndex(c=>Math.abs(c.time-cut.time)<1e-4);
+    if(existing>=0)this.cameraCuts[existing]=cut;else this.cameraCuts.push(cut);
+    this.cameraCuts.sort((a,b)=>a.time-b.time);
+    this._lastCameraId=null;this.onChange?.();this.#evaluateCameraCut(this.time);return cut;
   }
 
-  setDuration(seconds) {
-    this.duration=Math.max(.1,Number(seconds)||12);
-    this.time=Math.min(this.time,this.duration);
-    for(const track of this.tracks.values()) for(const k of track) k.time=Math.min(k.time,this.duration);
+  removeCameraCut(id){
+    const n=this.cameraCuts.length;this.cameraCuts=this.cameraCuts.filter(c=>c.id!==id);
+    if(this.cameraCuts.length!==n){this._lastCameraId=null;this.onChange?.();this.#evaluateCameraCut(this.time);}
+  }
+
+  removeCameraCutNear(time=this.time,tolerance=.2){
+    const cut=this.cameraCuts.reduce((best,c)=>Math.abs(c.time-time)<Math.abs((best?.time??Infinity)-time)?c:best,null);
+    if(cut&&Math.abs(cut.time-time)<=tolerance){this.removeCameraCut(cut.id);return true;}return false;
+  }
+
+  cameraAt(time=this.time){
+    if(!this.cameraCuts.length)return null;
+    let current=this.cameraCuts[0].cameraId;
+    for(const cut of this.cameraCuts){if(cut.time<=time+1e-6)current=cut.cameraId;else break;}
+    return current;
+  }
+
+  addEffect({type='explosion',targetId=null,start=this.time,end=null,offset=[0,0,0],direction=[0,0,1],size=1,intensity=1}={}){
+    const duration=type==='explosion'?1.15:3;
+    const effect={
+      id:crypto.randomUUID?.()??`fx-${Date.now()}-${Math.random()}`,
+      type:type==='rocketFlame'?'rocketFlame':'explosion',
+      targetId:targetId||null,
+      start:Math.max(0,Number(start)||0),
+      end:Math.min(this.duration,Number(end??((Number(start)||0)+duration))),
+      offset:[...offset].map(v=>Number(v)||0),
+      direction:[...direction].map(v=>Number(v)||0),
+      size:Math.max(.01,Number(size)||1),
+      intensity:Math.max(0,Number(intensity)||1)
+    };
+    if(effect.end<=effect.start)throw new Error("La fin de l'effet doit être après le début.");
+    if(effect.targetId&&!this.resolveObject(effect.targetId))throw new Error(`Cible d'effet introuvable: ${effect.targetId}`);
+    this.effects.push(effect);this.onChange?.();return effect;
+  }
+
+  removeEffect(id){const n=this.effects.length;this.effects=this.effects.filter(f=>f.id!==id);if(this.effects.length!==n)this.onChange?.();}
+
+  removeObjectReferences(id){
+    this.tracks.delete(id);
+    this.bindings=this.bindings.filter(b=>b.childId!==id&&b.targetId!==id);
+    this.cameraCuts=this.cameraCuts.filter(c=>c.cameraId!==id);
+    this.effects=this.effects.filter(f=>f.targetId!==id);
+    this._lastCameraId=null;this.onChange?.();
+  }
+
+  setDuration(seconds){
+    this.duration=Math.max(.1,Number(seconds)||12);this.time=Math.min(this.time,this.duration);
+    for(const track of this.tracks.values())for(const k of track)k.time=Math.min(k.time,this.duration);
     this.bindings=this.bindings.filter(b=>b.start<this.duration).map(b=>({...b,end:Math.min(b.end,this.duration)}));
-    this.onChange?.(); this.setTime(this.time);
+    this.cameraCuts=this.cameraCuts.filter(c=>c.time<=this.duration);
+    this.effects=this.effects.filter(f=>f.start<this.duration).map(f=>({...f,end:Math.min(f.end,this.duration)}));
+    this.onChange?.();this.setTime(this.time);
   }
 
-  setTime(time, evaluate=true) {
-    this.time=Math.max(0,Math.min(this.duration,Number(time)||0));
-    if(evaluate) this.evaluate(this.time);
-    this.onTime?.(this.time);
-  }
-
+  setTime(time,evaluate=true){this.time=Math.max(0,Math.min(this.duration,Number(time)||0));if(evaluate)this.evaluate(this.time);this.onTime?.(this.time);}
   play(){this.playing=true;}
   pause(){this.playing=false;}
   toggle(){this.playing=!this.playing;return this.playing;}
 
-  update(dt) {
-    if(!this.playing) return;
+  update(dt){
+    if(!this.playing)return;
     let next=this.time+dt*this.rate;
-    if(next>this.duration){
-      if(this.loop) next=next%this.duration; else {next=this.duration;this.playing=false;}
-    }
+    if(next>this.duration){if(this.loop)next=next%this.duration;else{next=this.duration;this.playing=false;}}
     this.setTime(next,true);
   }
 
-  evaluate(time=this.time) {
-    for(const [id,track] of this.tracks) {
-      const object=this.resolveObject(id); if(!object||!track.length) continue;
-      this.#evaluateTrack(object,track,time);
-    }
-    for(const binding of this.bindings) this.#applyBinding(binding,time);
+  evaluate(time=this.time){
+    for(const [id,track] of this.tracks){const object=this.resolveObject(id);if(!object||!track.length)continue;this.#evaluateTrack(object,track,time);}
+    for(const binding of this.bindings)this.#applyBinding(binding,time);
+    this.#evaluateCameraCut(time);
   }
 
-  #evaluateTrack(object, track, time) {
-    if(track.length===1 || time<=track[0].time){this.#applyFrame(object,track[0]);return;}
-    const last=track[track.length-1]; if(time>=last.time){this.#applyFrame(object,last);return;}
+  #evaluateTrack(object,track,time){
+    if(track.length===1||time<=track[0].time){this.#applyFrame(object,track[0]);return;}
+    const last=track[track.length-1];if(time>=last.time){this.#applyFrame(object,last);return;}
     let a=track[0],b=last;
-    for(let i=0;i<track.length-1;i++) if(time>=track[i].time&&time<=track[i+1].time){a=track[i];b=track[i+1];break;}
-    const raw=(time-a.time)/Math.max(1e-6,b.time-a.time);
-    const t=easing(a.interpolation,raw);
-    object.position.set(
-      THREE.MathUtils.lerp(a.position[0],b.position[0],t),
-      THREE.MathUtils.lerp(a.position[1],b.position[1],t),
-      THREE.MathUtils.lerp(a.position[2],b.position[2],t)
-    );
-    const qa=new THREE.Quaternion(...a.quaternion),qb=new THREE.Quaternion(...b.quaternion);
-    object.quaternion.copy(qa).slerp(qb,t);
-    object.scale.set(
-      THREE.MathUtils.lerp(a.scale[0],b.scale[0],t),
-      THREE.MathUtils.lerp(a.scale[1],b.scale[1],t),
-      THREE.MathUtils.lerp(a.scale[2],b.scale[2],t)
-    );
+    for(let i=0;i<track.length-1;i++)if(time>=track[i].time&&time<=track[i+1].time){a=track[i];b=track[i+1];break;}
+    const raw=(time-a.time)/Math.max(1e-6,b.time-a.time),t=easing(a.interpolation,raw);
+    object.position.set(lerp(a.position[0],b.position[0],t),lerp(a.position[1],b.position[1],t),lerp(a.position[2],b.position[2],t));
+    const qa=new THREE.Quaternion(...a.quaternion),qb=new THREE.Quaternion(...b.quaternion);object.quaternion.copy(qa).slerp(qb,t);
+    object.scale.set(lerp(a.scale[0],b.scale[0],t),lerp(a.scale[1],b.scale[1],t),lerp(a.scale[2],b.scale[2],t));
+    if(object.isPerspectiveCamera&&(a.camera||b.camera))this.#applyCameraInterpolation(object,a.camera||b.camera,b.camera||a.camera,t);
   }
 
   #applyFrame(object,frame){
-    object.position.fromArray(frame.position); object.quaternion.fromArray(frame.quaternion); object.scale.fromArray(frame.scale);
+    object.position.fromArray(frame.position);object.quaternion.fromArray(frame.quaternion);object.scale.fromArray(frame.scale);
+    if(object.isPerspectiveCamera&&frame.camera)this.#applyCameraInterpolation(object,frame.camera,frame.camera,0);
   }
 
-  #applyBinding(binding,time) {
-    if(time<binding.start||time>binding.end) return;
-    const child=this.resolveObject(binding.childId),target=this.resolveObject(binding.targetId);
-    if(!child||!target) return;
-    const blend=Math.min(binding.blend,(binding.end-binding.start)/2);
-    let weight=1;
-    if(blend>0){
-      if(time<binding.start+blend) weight=smooth((time-binding.start)/blend);
-      else if(time>binding.end-blend) weight=smooth((binding.end-time)/blend);
-    }
-    const cw=new THREE.Vector3(),tw=new THREE.Vector3(),desired=new THREE.Vector3();
-    child.getWorldPosition(cw); target.getWorldPosition(tw); desired.copy(tw).add(new THREE.Vector3(...binding.offset));
-    if(!binding.axes[0]) desired.x=cw.x; if(!binding.axes[1]) desired.y=cw.y; if(!binding.axes[2]) desired.z=cw.z;
-    desired.lerp(cw,1-weight);
+  #applyCameraInterpolation(camera,a,b,t){
+    const current=camera.userData.cameraSettings??={};
+    const focal=lerp(a.focalLength,b.focalLength,t),zoom=lerp(a.zoom,b.zoom,t);
+    current.focusDistance=lerp(a.focusDistance,b.focusDistance,t);
+    current.aperture=lerp(a.aperture,b.aperture,t);
+    current.maxBlur=lerp(a.maxBlur,b.maxBlur,t);
+    current.dofEnabled=t<.5?Boolean(a.dofEnabled):Boolean(b.dofEnabled);
+    current.focalLength=focal;current.zoom=zoom;
+    camera.setFocalLength(Math.max(1,focal));camera.zoom=Math.max(.05,zoom);camera.updateProjectionMatrix();
+  }
+
+  #applyBinding(binding,time){
+    if(time<binding.start||time>binding.end)return;
+    const child=this.resolveObject(binding.childId),target=this.resolveObject(binding.targetId);if(!child||!target)return;
+    const blend=Math.min(binding.blend,(binding.end-binding.start)/2);let weight=1;
+    if(blend>0){if(time<binding.start+blend)weight=smooth((time-binding.start)/blend);else if(time>binding.end-blend)weight=smooth((binding.end-time)/blend);}
+    const cw=new THREE.Vector3(),tw=new THREE.Vector3(),desired=new THREE.Vector3();child.getWorldPosition(cw);target.getWorldPosition(tw);desired.copy(tw).add(new THREE.Vector3(...binding.offset));
+    if(!binding.axes[0])desired.x=cw.x;if(!binding.axes[1])desired.y=cw.y;if(!binding.axes[2])desired.z=cw.z;desired.lerp(cw,1-weight);
     if(child.parent){child.parent.worldToLocal(desired);child.position.copy(desired);}else child.position.copy(desired);
-
-    if(binding.followRotation){
-      const cq=new THREE.Quaternion(),tq=new THREE.Quaternion(); child.getWorldQuaternion(cq);target.getWorldQuaternion(tq);cq.slerp(tq,weight);
-      if(child.parent){const pq=new THREE.Quaternion();child.parent.getWorldQuaternion(pq);child.quaternion.copy(pq.invert().multiply(cq));}else child.quaternion.copy(cq);
-    }
+    if(binding.followRotation){const cq=new THREE.Quaternion(),tq=new THREE.Quaternion();child.getWorldQuaternion(cq);target.getWorldQuaternion(tq);cq.slerp(tq,weight);if(child.parent){const pq=new THREE.Quaternion();child.parent.getWorldQuaternion(pq);child.quaternion.copy(pq.invert().multiply(cq));}else child.quaternion.copy(cq);}
   }
 
-  toJSON(){
-    return {version:1,duration:this.duration,loop:this.loop,tracks:Object.fromEntries(this.tracks),bindings:this.bindings};
+  #evaluateCameraCut(time){
+    const id=this.cameraAt(time);
+    if(id!==this._lastCameraId){this._lastCameraId=id;this.onCameraCut?.(id,time);}
   }
+
+  toJSON(){return {version:2,duration:this.duration,loop:this.loop,tracks:Object.fromEntries([...this.tracks].map(([id,frames])=>[id,frames.map(cloneFrame)])),bindings:this.bindings,cameraCuts:this.cameraCuts,effects:this.effects};}
 
   load(data){
-    if(!data||data.version!==1) throw new Error('Format de timeline non reconnu.');
-    this.duration=Math.max(.1,Number(data.duration)||12); this.loop=Boolean(data.loop);
-    this.tracks=new Map(Object.entries(data.tracks||{}).map(([id,frames])=>[id,frames.map(f=>({...f}))]));
+    if(!data||![1,2].includes(data.version))throw new Error('Format de timeline non reconnu.');
+    this.duration=Math.max(.1,Number(data.duration)||12);this.loop=Boolean(data.loop);
+    this.tracks=new Map(Object.entries(data.tracks||{}).map(([id,frames])=>[id,frames.map(cloneFrame)]));
     this.bindings=(data.bindings||[]).map(b=>({...b,axes:[...(b.axes||[true,true,true])],offset:[...(b.offset||[0,0,0])]}));
-    this.time=0;this.playing=false;this.onChange?.();this.setTime(0,true);
+    this.cameraCuts=(data.cameraCuts||[]).map(c=>({...c})).sort((a,b)=>a.time-b.time);
+    this.effects=(data.effects||[]).map(f=>({...f,offset:[...(f.offset||[0,0,0])],direction:[...(f.direction||[0,0,1])]}));
+    this.time=0;this.playing=false;this._lastCameraId=null;this.onChange?.();this.setTime(0,true);
   }
 }
