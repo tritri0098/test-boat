@@ -1,50 +1,31 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-export class SceneEditor {
-  constructor({ world, timeline, root }) {
-    this.world=world; this.timeline=timeline; this.root=root;
-    this.selectedId=null; this.transformMode='translate'; this.scrubbing=false;
-    this.transform=new TransformControls(world.camera,world.renderer.domElement);
-    this.transform.setSize(.85);
-    world.scene.add(this.transform.getHelper());
-    this.transform.addEventListener('dragging-changed',(e)=>{
-      world.cameraController.controls.enabled=!e.value;
-      if(e.value) timeline.pause();
-      this.#syncPlayButton();
-    });
-    this.transform.addEventListener('objectChange',()=>this.#updateInspector());
+export class SceneEditor{
+  constructor({world,timeline,root}){
+    this.world=world;this.timeline=timeline;this.root=root;this.selectedId=null;this.transformMode='translate';
+    this.transform=new TransformControls(world.camera,world.renderer.domElement);this.transform.setSize(.85);this.transformHelper=this.transform.getHelper();world.scene.add(this.transformHelper);
+    this.transform.addEventListener('dragging-changed',(e)=>{world.cameraController.controls.enabled=!e.value&&world.viewMode==='editor';if(e.value)timeline.pause();this.#syncPlayButton();});
+    this.transform.addEventListener('objectChange',()=>{this.#updateInspector();this.#updateCameraInspector();});
 
-    this.#cache(); this.#bind(); this.#enableViewportPicking();
-    timeline.onTime=(t)=>this.#renderPlayhead(t);
+    this.#cache();this.#bind();this.#enableViewportPicking();
+    timeline.onTime=(t)=>{this.#renderPlayhead(t);this.#updateInspector();this.#updateCameraInspector();};
     timeline.onChange=()=>this.renderTimeline();
     world.onObjectsChanged=()=>this.refreshObjects();
-    this.refreshObjects(); this.renderTimeline(); this.#renderPlayhead(0);
-  }
-
-  #enableViewportPicking(){
-    const canvas=this.world.renderer.domElement;
-    const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2();
-    let down=null;
-    canvas.addEventListener('pointerdown',(e)=>{down={x:e.clientX,y:e.clientY};});
-    canvas.addEventListener('pointerup',(e)=>{
-      if(!down||Math.hypot(e.clientX-down.x,e.clientY-down.y)>5){down=null;return;}
-      down=null;const r=canvas.getBoundingClientRect();pointer.x=((e.clientX-r.left)/r.width)*2-1;pointer.y=-((e.clientY-r.top)/r.height)*2+1;
-      raycaster.setFromCamera(pointer,this.world.camera);
-      const hits=raycaster.intersectObjects([...this.world.objects.values()].map(a=>a.object),true);
-      for(const hit of hits){let o=hit.object;while(o&&!o.userData?.editorId)o=o.parent;if(o?.userData?.editorId){this.select(o.userData.editorId);break;}}
-    });
+    world.onViewModeChanged=(mode)=>this.#syncViewMode(mode);
+    this.refreshObjects();this.renderTimeline();this.#renderPlayhead(0);this.#syncViewMode(world.viewMode);
   }
 
   #cache(){
     const q=(s)=>this.root.querySelector(s);
-    this.objectList=q('#editor-object-list');this.timelineRows=q('#timeline-rows');this.ruler=q('#timeline-ruler');
-    this.playhead=q('#timeline-playhead');this.scrub=q('#timeline-scrub');this.timeLabel=q('#timeline-time');
-    this.durationInput=q('#timeline-duration');this.playBtn=q('#timeline-play');this.loop=q('#timeline-loop');
-    this.modeBtns=[...this.root.querySelectorAll('[data-transform-mode]')];
-    this.keyEase=q('#key-ease');this.bindingTarget=q('#binding-target');this.bindingStart=q('#binding-start');this.bindingEnd=q('#binding-end');this.bindingBlend=q('#binding-blend');
-    this.bindX=q('#bind-x');this.bindY=q('#bind-y');this.bindZ=q('#bind-z');this.bindRot=q('#bind-rotation');this.bindingList=q('#binding-list');
+    this.objectList=q('#editor-object-list');this.timelineRows=q('#timeline-rows');this.ruler=q('#timeline-ruler');this.playhead=q('#timeline-playhead');this.scrub=q('#timeline-scrub');this.timeLabel=q('#timeline-time');
+    this.durationInput=q('#timeline-duration');this.playBtn=q('#timeline-play');this.loop=q('#timeline-loop');this.modeBtns=[...this.root.querySelectorAll('[data-transform-mode]')];this.keyEase=q('#key-ease');
+    this.bindingTarget=q('#binding-target');this.bindingStart=q('#binding-start');this.bindingEnd=q('#binding-end');this.bindingBlend=q('#binding-blend');this.bindX=q('#bind-x');this.bindY=q('#bind-y');this.bindZ=q('#bind-z');this.bindRot=q('#bind-rotation');this.bindingList=q('#binding-list');
     this.inspector=q('#transform-inspector');
+    this.cameraSelect=q('#camera-select');this.cameraPanel=q('#camera-lens-panel');this.cameraInputs={
+      focalLength:q('#camera-focal'),zoom:q('#camera-zoom'),focusDistance:q('#camera-focus'),aperture:q('#camera-aperture'),maxBlur:q('#camera-maxblur'),dofEnabled:q('#camera-dof')
+    };
+    this.effectTarget=q('#effect-target');this.effectType=q('#effect-type');this.effectList=q('#effect-list');
   }
 
   #bind(){
@@ -59,105 +40,138 @@ export class SceneEditor {
     this.root.querySelector('#add-binding').addEventListener('click',()=>this.addBinding());
     this.root.querySelector('#timeline-export').addEventListener('click',()=>this.exportJSON());
     this.root.querySelector('#timeline-import').addEventListener('change',(e)=>this.importJSON(e.target.files?.[0]));
-    for(const input of this.inspector.querySelectorAll('input[data-transform]')) input.addEventListener('change',()=>this.#applyInspector());
+    for(const input of this.inspector.querySelectorAll('input[data-transform]'))input.addEventListener('change',()=>this.#applyInspector());
+
+    this.root.querySelector('#view-editor').addEventListener('click',()=>this.world.setViewMode('editor'));
+    this.root.querySelector('#view-cinematic').addEventListener('click',()=>this.world.setViewMode('cinematic'));
+    this.root.querySelector('#add-camera').addEventListener('click',()=>{const actor=this.world.addCinematicCamera({id:`camera-${this.world.cameraManager.cameras.size+1}`});this.select(actor.id);this.timeline.captureKeyframe(actor.id,this.timeline.time,{interpolation:this.keyEase.value});});
+    this.root.querySelector('#remove-camera').addEventListener('click',()=>{const id=this.cameraSelect.value;if(!id)return;this.timeline.removeObjectReferences(id);this.world.removeObject(id);});
+    this.cameraSelect.addEventListener('change',()=>{if(this.cameraSelect.value)this.select(this.cameraSelect.value);});
+    this.root.querySelector('#add-camera-cut').addEventListener('click',()=>{const id=this.cameraSelect.value;if(id)this.timeline.addCameraCut(id,this.timeline.time);});
+    this.root.querySelector('#remove-camera-cut').addEventListener('click',()=>this.timeline.removeCameraCutNear(this.timeline.time,.3));
+    for(const input of Object.values(this.cameraInputs))input.addEventListener('change',()=>this.#applyCameraInspector());
+
+    this.root.querySelector('#add-effect').addEventListener('click',()=>this.addEffect());
+    this.root.querySelector('#effect-use-selection').addEventListener('click',()=>{const actor=this.world.objects.get(this.selectedId);if(actor&&actor.kind!=='camera'){this.effectTarget.value=this.selectedId;for(const id of ['effect-x','effect-y','effect-z'])this.root.querySelector(`#${id}`).value=0;}});
+    this.effectType.addEventListener('change',()=>{const start=Number(this.root.querySelector('#effect-start').value)||this.timeline.time;this.root.querySelector('#effect-end').value=(start+(this.effectType.value==='explosion'?1.15:3)).toFixed(2);});
+  }
+
+  #enableViewportPicking(){
+    const canvas=this.world.renderer.domElement,raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2();let down=null;
+    canvas.addEventListener('pointerdown',(e)=>{down={x:e.clientX,y:e.clientY};});
+    canvas.addEventListener('pointerup',(e)=>{
+      if(this.world.viewMode!=='editor'){down=null;return;}
+      if(!down||Math.hypot(e.clientX-down.x,e.clientY-down.y)>5){down=null;return;}down=null;
+      const r=canvas.getBoundingClientRect();pointer.x=((e.clientX-r.left)/r.width)*2-1;pointer.y=-((e.clientY-r.top)/r.height)*2+1;raycaster.setFromCamera(pointer,this.world.camera);
+      const targets=[...this.world.objects.values()].filter(a=>a.kind!=='camera').map(a=>a.object);const hits=raycaster.intersectObjects(targets,true);
+      for(const hit of hits){let o=hit.object;while(o&&!o.userData?.editorId)o=o.parent;if(o?.userData?.editorId){this.select(o.userData.editorId);break;}}
+    });
   }
 
   refreshObjects(){
-    const ids=[...this.world.objects.keys()];
-    this.objectList.innerHTML=''; this.bindingTarget.innerHTML='';
+    const ids=[...this.world.objects.keys()];this.objectList.innerHTML='';this.bindingTarget.innerHTML='';this.cameraSelect.innerHTML='';this.effectTarget.innerHTML='<option value="">Monde / position absolue</option>';
     for(const id of ids){
-      const btn=document.createElement('button');btn.type='button';btn.className='object-chip';btn.textContent=id;btn.dataset.id=id;btn.addEventListener('click',()=>this.select(id));this.objectList.append(btn);
+      const actor=this.world.objects.get(id);const btn=document.createElement('button');btn.type='button';btn.className=`object-chip ${actor.kind==='camera'?'camera-chip':''}`;btn.textContent=actor.kind==='camera'?`🎥 ${id}`:id;btn.dataset.id=id;btn.addEventListener('click',()=>this.select(id));this.objectList.append(btn);
       const opt=document.createElement('option');opt.value=id;opt.textContent=id;this.bindingTarget.append(opt);
+      if(actor.kind==='camera'){const co=document.createElement('option');co.value=id;co.textContent=id;this.cameraSelect.append(co);}else{const eo=document.createElement('option');eo.value=id;eo.textContent=id;this.effectTarget.append(eo);}
     }
-    if(!this.selectedId||!this.world.objects.has(this.selectedId)) this.selectedId=ids[0]||null;
-    if(this.selectedId) this.select(this.selectedId); else this.transform.detach();
+    if(!this.selectedId||!this.world.objects.has(this.selectedId))this.selectedId=ids[0]||null;
+    if(this.selectedId)this.select(this.selectedId);else this.transform.detach();
     this.renderTimeline();
   }
 
   select(id){
-    const object=this.world.getEditableObject(id);if(!object)return;
-    this.selectedId=id;this.world.setActiveBoat(id);this.transform.attach(object);
-    [...this.objectList.children].forEach(b=>b.classList.toggle('selected',b.dataset.id===id));
-    [...this.bindingTarget.options].forEach(o=>o.disabled=o.value===id);
+    const object=this.world.getEditableObject(id);if(!object)return;this.selectedId=id;this.world.setActiveObject(id);this.transform.attach(object);
+    [...this.objectList.children].forEach(b=>b.classList.toggle('selected',b.dataset.id===id));[...this.bindingTarget.options].forEach(o=>o.disabled=o.value===id);
     if(this.bindingTarget.value===id){const other=[...this.bindingTarget.options].find(o=>!o.disabled);if(other)this.bindingTarget.value=other.value;}
-    this.#updateInspector();this.renderTimeline();
+    if(object.isPerspectiveCamera)this.cameraSelect.value=id;
+    this.#updateInspector();this.#updateCameraInspector();this.renderTimeline();
   }
 
-  setTransformMode(mode){
-    this.transformMode=mode;this.transform.setMode(mode);
-    this.modeBtns.forEach(b=>b.classList.toggle('active',b.dataset.transformMode===mode));
-  }
-
-  addKeyframe(){
-    if(!this.selectedId)return;
-    this.timeline.captureKeyframe(this.selectedId,this.timeline.time,{interpolation:this.keyEase.value});
-  }
+  setTransformMode(mode){this.transformMode=mode;this.transform.setMode(mode);this.modeBtns.forEach(b=>b.classList.toggle('active',b.dataset.transformMode===mode));}
+  addKeyframe(){if(this.selectedId)this.timeline.captureKeyframe(this.selectedId,this.timeline.time,{interpolation:this.keyEase.value});}
 
   addBinding(){
-    if(!this.selectedId)return;
-    const start=Number(this.bindingStart.value),end=Number(this.bindingEnd.value);
-    this.timeline.addBinding({childId:this.selectedId,targetId:this.bindingTarget.value,start,end,blend:Number(this.bindingBlend.value),axes:[this.bindX.checked,this.bindY.checked,this.bindZ.checked],followRotation:this.bindRot.checked});
-    this.renderTimeline();
+    if(!this.selectedId)return;this.timeline.addBinding({childId:this.selectedId,targetId:this.bindingTarget.value,start:Number(this.bindingStart.value),end:Number(this.bindingEnd.value),blend:Number(this.bindingBlend.value),axes:[this.bindX.checked,this.bindY.checked,this.bindZ.checked],followRotation:this.bindRot.checked});this.renderTimeline();
+  }
+
+  addEffect(){
+    const n=(id,fallback=0)=>{const v=Number(this.root.querySelector(`#${id}`).value);return Number.isFinite(v)?v:fallback;};
+    this.timeline.addEffect({
+      type:this.effectType.value,targetId:this.effectTarget.value||null,start:n('effect-start',this.timeline.time),end:n('effect-end',this.timeline.time+1),
+      offset:[n('effect-x'),n('effect-y'),n('effect-z')],direction:[n('effect-dx',0),n('effect-dy',0),n('effect-dz',1)],size:n('effect-size',1),intensity:n('effect-intensity',1)
+    });
   }
 
   renderTimeline(){
-    const duration=this.timeline.duration;
-    this.durationInput.value=duration;this.scrub.max=duration;this.loop.checked=this.timeline.loop;
-    this.ruler.innerHTML='';
-    const ticks=Math.max(2,Math.min(12,Math.ceil(duration)));
-    for(let i=0;i<=ticks;i++){const t=duration*i/ticks;const mark=document.createElement('span');mark.style.left=`${t/duration*100}%`;mark.textContent=`${t.toFixed(ticks>8?0:1)}s`;this.ruler.append(mark);}
-    this.timelineRows.innerHTML='';
+    const duration=this.timeline.duration;this.durationInput.value=duration;this.scrub.max=duration;this.loop.checked=this.timeline.loop;this.ruler.innerHTML='';
+    const ticks=Math.max(2,Math.min(12,Math.ceil(duration)));for(let i=0;i<=ticks;i++){const t=duration*i/ticks,mark=document.createElement('span');mark.style.left=`${t/duration*100}%`;mark.textContent=`${t.toFixed(ticks>8?0:1)}s`;this.ruler.append(mark);}
+    this.timelineRows.innerHTML='';this.#renderCameraCutRow(duration);this.#renderEffectRow(duration);
     for(const [id,actor] of this.world.objects){
       const row=document.createElement('div');row.className='timeline-row';row.classList.toggle('selected',id===this.selectedId);
-      const label=document.createElement('button');label.type='button';label.className='track-label';label.textContent=id;label.addEventListener('click',()=>this.select(id));row.append(label);
+      const label=document.createElement('button');label.type='button';label.className='track-label';label.textContent=actor.kind==='camera'?`🎥 ${id}`:id;label.addEventListener('click',()=>this.select(id));row.append(label);
       const lane=document.createElement('div');lane.className='track-lane';row.append(lane);
-      for(const frame of this.timeline.tracks.get(id)||[]){
-        const key=document.createElement('button');key.type='button';key.className='timeline-key';key.title=`${frame.time.toFixed(2)} s`;key.style.left=`${frame.time/duration*100}%`;
-        key.addEventListener('click',(e)=>{e.stopPropagation();this.select(id);this.timeline.setTime(frame.time,true);});lane.append(key);
-      }
-      for(const b of this.timeline.bindings.filter(x=>x.childId===id)){
-        const bar=document.createElement('button');bar.type='button';bar.className='binding-bar';bar.style.left=`${b.start/duration*100}%`;bar.style.width=`${(b.end-b.start)/duration*100}%`;bar.title=`Suit ${b.targetId} · ${b.start.toFixed(2)}–${b.end.toFixed(2)} s`;bar.textContent=`→ ${b.targetId}`;bar.addEventListener('click',(e)=>{e.stopPropagation();if(confirm(`Supprimer la liaison vers ${b.targetId} ?`))this.timeline.removeBinding(b.id);});lane.append(bar);
-      }
-      lane.addEventListener('pointerdown',(e)=>{const r=lane.getBoundingClientRect();this.timeline.setTime((e.clientX-r.left)/r.width*duration,true);});
-      this.timelineRows.append(row);
+      for(const frame of this.timeline.tracks.get(id)||[]){const key=document.createElement('button');key.type='button';key.className='timeline-key';key.title=`${frame.time.toFixed(2)} s`;key.style.left=`${frame.time/duration*100}%`;key.addEventListener('click',(e)=>{e.stopPropagation();this.select(id);this.timeline.setTime(frame.time,true);});lane.append(key);}
+      for(const b of this.timeline.bindings.filter(x=>x.childId===id)){const bar=document.createElement('button');bar.type='button';bar.className='binding-bar';bar.style.left=`${b.start/duration*100}%`;bar.style.width=`${(b.end-b.start)/duration*100}%`;bar.title=`Suit ${b.targetId} · ${b.start.toFixed(2)}–${b.end.toFixed(2)} s`;bar.textContent=`→ ${b.targetId}`;bar.addEventListener('click',(e)=>{e.stopPropagation();if(confirm(`Supprimer la liaison vers ${b.targetId} ?`))this.timeline.removeBinding(b.id);});lane.append(bar);}
+      lane.addEventListener('pointerdown',(e)=>{const r=lane.getBoundingClientRect();this.timeline.setTime((e.clientX-r.left)/r.width*duration,true);});this.timelineRows.append(row);
     }
-    this.#renderBindings();this.#renderPlayhead(this.timeline.time);
+    this.#renderBindings();this.#renderEffectsList();this.#renderPlayhead(this.timeline.time);
+  }
+
+  #renderCameraCutRow(duration){
+    const row=document.createElement('div');row.className='timeline-row special-row';const label=document.createElement('div');label.className='track-label static-label';label.textContent='🎬 CAM CUT';row.append(label);
+    const lane=document.createElement('div');lane.className='track-lane camera-cut-lane';row.append(lane);const cuts=[...this.timeline.cameraCuts].sort((a,b)=>a.time-b.time);
+    for(let i=0;i<cuts.length;i++){const cut=cuts[i],next=cuts[i+1]?.time??duration;const bar=document.createElement('button');bar.type='button';bar.className='camera-cut-bar';bar.style.left=`${cut.time/duration*100}%`;bar.style.width=`${Math.max(.7,(next-cut.time)/duration*100)}%`;bar.textContent=cut.cameraId;bar.title=`${cut.cameraId} à ${cut.time.toFixed(2)} s`;bar.addEventListener('click',(e)=>{e.stopPropagation();this.select(cut.cameraId);this.timeline.setTime(cut.time,true);});lane.append(bar);}
+    lane.addEventListener('pointerdown',(e)=>{const r=lane.getBoundingClientRect();this.timeline.setTime((e.clientX-r.left)/r.width*duration,true);});this.timelineRows.append(row);
+  }
+
+  #renderEffectRow(duration){
+    const row=document.createElement('div');row.className='timeline-row special-row';const label=document.createElement('div');label.className='track-label static-label';label.textContent='✨ FX';row.append(label);
+    const lane=document.createElement('div');lane.className='track-lane fx-lane';row.append(lane);
+    for(const fx of this.timeline.effects){const bar=document.createElement('button');bar.type='button';bar.className=`effect-bar ${fx.type==='rocketFlame'?'flame':''}`;bar.style.left=`${fx.start/duration*100}%`;bar.style.width=`${Math.max(.8,(fx.end-fx.start)/duration*100)}%`;bar.textContent=fx.type==='rocketFlame'?'🔥 moteur':'💥 explosion';bar.title=`${fx.start.toFixed(2)}–${fx.end.toFixed(2)} s${fx.targetId?` · ${fx.targetId}`:''}`;bar.addEventListener('click',(e)=>{e.stopPropagation();this.timeline.setTime(fx.start,true);});lane.append(bar);}
+    lane.addEventListener('pointerdown',(e)=>{const r=lane.getBoundingClientRect();this.timeline.setTime((e.clientX-r.left)/r.width*duration,true);});this.timelineRows.append(row);
   }
 
   #renderBindings(){
-    this.bindingList.innerHTML='';
-    for(const b of this.timeline.bindings){
-      const el=document.createElement('div');el.className='binding-item';
-      el.innerHTML=`<span><b>${this.#escape(b.childId)}</b> → ${this.#escape(b.targetId)}</span><small>${b.start.toFixed(2)}–${b.end.toFixed(2)} s · fondu ${b.blend.toFixed(2)} s</small>`;
-      const del=document.createElement('button');del.type='button';del.textContent='×';del.addEventListener('click',()=>this.timeline.removeBinding(b.id));el.append(del);this.bindingList.append(el);
-    }
+    this.bindingList.innerHTML='';for(const b of this.timeline.bindings){const el=document.createElement('div');el.className='binding-item';el.innerHTML=`<span><b>${this.#escape(b.childId)}</b> → ${this.#escape(b.targetId)}</span><small>${b.start.toFixed(2)}–${b.end.toFixed(2)} s · fondu ${b.blend.toFixed(2)} s</small>`;const del=document.createElement('button');del.type='button';del.textContent='×';del.addEventListener('click',()=>this.timeline.removeBinding(b.id));el.append(del);this.bindingList.append(el);}
   }
 
-  #renderPlayhead(t){
-    const pct=this.timeline.duration?100*t/this.timeline.duration:0;
-    this.playhead.style.left=`calc(var(--track-label-width) + (100% - var(--track-label-width)) * ${pct/100})`;
-    this.scrub.value=t;this.timeLabel.textContent=`${t.toFixed(2)} s`;
+  #renderEffectsList(){
+    this.effectList.innerHTML='';for(const fx of this.timeline.effects){const el=document.createElement('div');el.className='binding-item';el.innerHTML=`<span><b>${fx.type==='rocketFlame'?'Flamme moteur':'Explosion'}</b>${fx.targetId?` → ${this.#escape(fx.targetId)}`:' · monde'}</span><small>${fx.start.toFixed(2)}–${fx.end.toFixed(2)} s · taille ${fx.size.toFixed(2)}</small>`;const del=document.createElement('button');del.type='button';del.textContent='×';del.addEventListener('click',()=>this.timeline.removeEffect(fx.id));el.append(del);this.effectList.append(el);}
   }
+
+  #renderPlayhead(t){const pct=this.timeline.duration?100*t/this.timeline.duration:0;this.playhead.style.left=`calc(var(--track-label-width) + (100% - var(--track-label-width)) * ${pct/100})`;this.scrub.value=t;this.timeLabel.textContent=`${t.toFixed(2)} s`;}
 
   #updateInspector(){
-    const o=this.world.getEditableObject(this.selectedId);if(!o)return;
-    const e=new THREE.Euler().setFromQuaternion(o.quaternion,'XYZ');
-    const vals={px:o.position.x,py:o.position.y,pz:o.position.z,rx:THREE.MathUtils.radToDeg(e.x),ry:THREE.MathUtils.radToDeg(e.y),rz:THREE.MathUtils.radToDeg(e.z),sx:o.scale.x,sy:o.scale.y,sz:o.scale.z};
+    const o=this.world.getEditableObject(this.selectedId);if(!o)return;const e=new THREE.Euler().setFromQuaternion(o.quaternion,'XYZ');const vals={px:o.position.x,py:o.position.y,pz:o.position.z,rx:THREE.MathUtils.radToDeg(e.x),ry:THREE.MathUtils.radToDeg(e.y),rz:THREE.MathUtils.radToDeg(e.z),sx:o.scale.x,sy:o.scale.y,sz:o.scale.z};
     for(const [k,v] of Object.entries(vals)){const input=this.inspector.querySelector(`[data-transform="${k}"]`);if(input&&!input.matches(':focus'))input.value=v.toFixed(k[0]==='r'?1:3);}
   }
 
   #applyInspector(){
-    const o=this.world.getEditableObject(this.selectedId);if(!o)return;
-    const n=k=>Number(this.inspector.querySelector(`[data-transform="${k}"]`).value)||0;
-    o.position.set(n('px'),n('py'),n('pz'));o.rotation.set(THREE.MathUtils.degToRad(n('rx')),THREE.MathUtils.degToRad(n('ry')),THREE.MathUtils.degToRad(n('rz')));o.scale.set(Math.max(.001,n('sx')),Math.max(.001,n('sy')),Math.max(.001,n('sz')));
+    const o=this.world.getEditableObject(this.selectedId);if(!o)return;const n=k=>Number(this.inspector.querySelector(`[data-transform="${k}"]`).value)||0;o.position.set(n('px'),n('py'),n('pz'));o.rotation.set(THREE.MathUtils.degToRad(n('rx')),THREE.MathUtils.degToRad(n('ry')),THREE.MathUtils.degToRad(n('rz')));o.scale.set(Math.max(.001,n('sx')),Math.max(.001,n('sy')),Math.max(.001,n('sz')));
+  }
+
+  #updateCameraInspector(){
+    const o=this.world.getEditableObject(this.selectedId),isCamera=Boolean(o?.isPerspectiveCamera);this.cameraPanel.classList.toggle('disabled-panel',!isCamera);if(!isCamera)return;
+    const s=this.world.cameraManager.getLens(o);if(!s)return;
+    for(const key of ['focalLength','zoom','focusDistance','aperture','maxBlur']){const input=this.cameraInputs[key];if(input&&!input.matches(':focus'))input.value=Number(s[key]).toFixed(key==='focalLength'?1:key==='aperture'?6:3);}
+    this.cameraInputs.dofEnabled.checked=s.dofEnabled;this.cameraSelect.value=this.selectedId;
+  }
+
+  #applyCameraInspector(){
+    const o=this.world.getEditableObject(this.selectedId);if(!o?.isPerspectiveCamera)return;
+    this.world.cameraManager.applyLens(o,{focalLength:Number(this.cameraInputs.focalLength.value),zoom:Number(this.cameraInputs.zoom.value),focusDistance:Number(this.cameraInputs.focusDistance.value),aperture:Number(this.cameraInputs.aperture.value),maxBlur:Number(this.cameraInputs.maxBlur.value),dofEnabled:this.cameraInputs.dofEnabled.checked});
+  }
+
+  #syncViewMode(mode){
+    const editor=mode==='editor';this.transformHelper.visible=editor;this.transform.enabled=editor;this.world.cameraController.controls.enabled=editor;
+    this.root.querySelector('#view-editor').classList.toggle('active',editor);this.root.querySelector('#view-cinematic').classList.toggle('active',!editor);
+    this.root.querySelector('.scene-hud strong').textContent=editor?'Édition 3D':'Aperçu cinématique';this.root.querySelector('.scene-hud span').textContent=editor?'Gizmos + OrbitControls':'Point de vue de la caméra active · coupes timeline';
   }
 
   #syncPlayButton(){this.playBtn.textContent=this.timeline.playing?'Pause':'Lecture';}
 
-  exportJSON(){
-    const blob=new Blob([JSON.stringify(this.timeline.toJSON(),null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='scene-timeline.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),500);
-  }
-
+  exportJSON(){const blob=new Blob([JSON.stringify(this.timeline.toJSON(),null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='scene-timeline.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),500);}
   async importJSON(file){if(!file)return;try{this.timeline.load(JSON.parse(await file.text()));this.renderTimeline();}catch(err){alert(err.message);}}
   #escape(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 }
