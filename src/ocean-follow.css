@@ -1,0 +1,42 @@
+.ocean-follow-bar{
+  position:absolute;
+  left:0;
+  bottom:3px;
+  height:4px;
+  border-radius:999px;
+  background:linear-gradient(90deg,rgba(63,178,217,.45),rgba(100,218,232,.8));
+  box-shadow:0 0 8px rgba(90,210,235,.28);
+  pointer-events:none;
+  z-index:2;
+}
+
+.ocean-follow-key{
+  position:absolute;
+  top:50%;
+  width:19px;
+  height:19px;
+  min-height:19px;
+  padding:0;
+  transform:translate(-50%,-50%);
+  border-radius:50%;
+  font-size:11px;
+  line-height:17px;
+  z-index:6;
+  box-shadow:0 0 0 2px rgba(9,15,20,.55);
+}
+
+.ocean-follow-key.enabled{
+  background:#176c86;
+  border-color:#72d2e5;
+  color:#e6fbff;
+}
+
+.ocean-follow-key.disabled{
+  background:#29323a;
+  border-color:#71818c;
+  color:#d3dde2;
+}
+
+#sea-follow-status{
+  min-height:16px;
+}
