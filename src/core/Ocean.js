@@ -9,17 +9,18 @@ const WAVE_DEFS=[
 ];
 
 const DEFAULTS={
-  // The ocean is streamed as a world-space quadtree. The root is deliberately
-  // enormous; only visible leaves are sent to the GPU.
-  rootSize:524288,       // 524 km square world sector
-  rootStride:65536,      // sector centre moves only every 65 km
-  minTileSize:8,         // finest world-space tile: 8 m
-  segments:12,           // 12x12 cells per tile => ~0.67 m near-camera spacing
-  targetTilePixels:190,  // screen-space error target; smaller = more detail
+  // World-space quadtree. 2,097 km across is enough to retain a true spherical
+  // horizon from low and medium camera altitudes without allocating a giant mesh.
+  rootSize:2097152,
+  rootStride:262144,
+  minTileSize:8,
+  segments:12,
+  targetTilePixels:190,
   maxLeaves:6500,
   lodIntervalMs:70,
   waveBounds:8,
-  skirtDepth:8
+  skirtDepth:8,
+  earthRadius:6371000
 };
 
 function makeTileGeometry(segments,skirtDepth){
@@ -28,9 +29,7 @@ function makeTileGeometry(segments,skirtDepth){
   const row=segments+1;
 
   for(let z=0;z<=segments;z++){
-    for(let x=0;x<=segments;x++){
-      positions.push(x/segments-.5,0,z/segments-.5);
-    }
+    for(let x=0;x<=segments;x++)positions.push(x/segments-.5,0,z/segments-.5);
   }
 
   for(let z=0;z<segments;z++){
@@ -74,7 +73,6 @@ export class Ocean{
     this.options={...DEFAULTS,...options};
     this.group=new THREE.Group();
     this.group.name='world-ocean';
-    // Compatibility with the previous OceanWorld API.
     this.mesh=this.group;
 
     this.geometry=makeTileGeometry(this.options.segments,this.options.skirtDepth);
@@ -129,10 +127,11 @@ export class Ocean{
     while(stack.length){
       const node=stack.pop();
       nodes++;
-      if(!this.#nodeVisible(node))continue;
+      const bounds=this.#nodeBounds(node);
+      if(!this.frustum.intersectsBox(bounds))continue;
 
-      const distance=this.#distanceToNode(camera.position,node);
-      const projected=node.size*pixelsPerWorldAtUnit/Math.max(distance,.5);
+      const distance=Math.max(.5,bounds.distanceToPoint(camera.position));
+      const projected=node.size*pixelsPerWorldAtUnit/distance;
       const canSplit=node.depth<maxDepth&&node.size*.5>=this.options.minTileSize;
       const budgetOk=leaves+stack.length<this.options.maxLeaves&&nodes<maxNodes;
 
@@ -155,9 +154,7 @@ export class Ocean{
       }
     }
 
-    for(const [depth,level] of this.levels){
-      if(!buckets.has(depth))level.mesh.count=0;
-    }
+    for(const [depth,level] of this.levels)if(!buckets.has(depth))level.mesh.count=0;
 
     for(const [depth,nodesAtDepth] of buckets){
       const tileSize=rootSize/Math.pow(2,depth);
@@ -203,14 +200,19 @@ export class Ocean{
     if(this.materials.has(depth))return this.materials.get(depth);
     const cellSize=tileSize/this.options.segments;
     const uniforms={
-      uTime:{value:0},uStorm:{value:0},uSunDir:{value:new THREE.Vector3(.5,.78,.37).normalize()},
-      uFogColor:{value:new THREE.Color(0xbad8e3)},uFogDensity:{value:.000014},uCellSize:{value:cellSize}
+      uTime:{value:0},
+      uStorm:{value:0},
+      uSunDir:{value:new THREE.Vector3(.5,.78,.37).normalize()},
+      uFogColor:{value:new THREE.Color(0xbad8e3)},
+      uFogDensity:{value:.000014},
+      uCellSize:{value:cellSize},
+      uEarthRadius:{value:this.options.earthRadius}
     };
 
     const material=new THREE.ShaderMaterial({
       uniforms,side:THREE.DoubleSide,
       vertexShader:`
-        uniform float uTime,uStorm,uCellSize;
+        uniform float uTime,uStorm,uCellSize,uEarthRadius;
         varying vec3 vWorld,vNormalW;varying float vHeight;
         const float TAU=6.28318530718;
         void W(vec2 p,vec2 d,float L,float sp,float ph,float a0,float a1,inout float h,inout vec2 g){
@@ -231,8 +233,16 @@ export class Ocean{
           W(p,vec2(.57,-.82),8.2,3.4,4.,.04,.44,h,g);
           W(p,vec2(-.94,.33),5.2,2.7,2.4,.02,.21,h,g);
           W(p,vec2(.16,.98),2.8,1.9,5.,.01,.10,h,g);
-          world.y+=h;
-          vec3 n=normalize(vec3(-g.x,1.,-g.y));
+
+          float r2=dot(world.xz,world.xz);
+          float radialY=sqrt(max(uEarthRadius*uEarthRadius-r2,1.0));
+          float sphereY=radialY-uEarthRadius;
+          world.y+=sphereY+h;
+
+          // Radius vector gives the normal of the Earth sphere. Wave slopes then
+          // perturb that normal locally, so specular light also follows curvature.
+          vec3 sphereNormal=normalize(vec3(world.x,radialY,world.z));
+          vec3 n=normalize(sphereNormal+vec3(-g.x,0.,-g.y));
           vWorld=world.xyz;vNormalW=n;vHeight=h;
           gl_Position=projectionMatrix*viewMatrix*world;
         }
@@ -261,24 +271,30 @@ export class Ocean{
     return material;
   }
 
-  #nodeVisible(node){
+  #nodeBounds(node){
     const h=node.size*.5;
-    const box=new THREE.Box3(
-      new THREE.Vector3(node.x-h,-this.options.waveBounds,node.z-h),
-      new THREE.Vector3(node.x+h,this.options.waveBounds,node.z+h)
+    const x0=node.x-h,x1=node.x+h,z0=node.z-h,z1=node.z+h;
+    const closestX=x0>0?x0:(x1<0?x1:0);
+    const closestZ=z0>0?z0:(z1<0?z1:0);
+    const heights=[
+      this.curvatureHeightAt(x0,z0),this.curvatureHeightAt(x1,z0),
+      this.curvatureHeightAt(x0,z1),this.curvatureHeightAt(x1,z1),
+      this.curvatureHeightAt(closestX,closestZ)
+    ];
+    return new THREE.Box3(
+      new THREE.Vector3(x0,Math.min(...heights)-this.options.waveBounds,z0),
+      new THREE.Vector3(x1,Math.max(...heights)+this.options.waveBounds,z1)
     );
-    return this.frustum.intersectsBox(box);
   }
 
-  #distanceToNode(camera,node){
-    const h=node.size*.5;
-    const dx=Math.max(Math.abs(camera.x-node.x)-h,0);
-    const dz=Math.max(Math.abs(camera.z-node.z)-h,0);
-    const dy=Math.max(Math.abs(camera.y)-this.options.waveBounds,0);
-    return Math.hypot(dx,dy,dz);
+  curvatureHeightAt(x,z){
+    const R=this.options.earthRadius;
+    const r2=x*x+z*z;
+    if(r2>=R*R)return -R;
+    return Math.sqrt(R*R-r2)-R;
   }
 
-  heightAt(x,z,time,storm){
+  waveHeightAt(x,z,time,storm){
     let h=0;const TAU=Math.PI*2;
     for(const w of WAVE_DEFS){
       const len=Math.hypot(w.dir[0],w.dir[1]),dx=w.dir[0]/len,dz=w.dir[1]/len;
@@ -286,6 +302,10 @@ export class Ocean{
       h+=a*Math.sin(k*(dx*x+dz*z)+k*w.speed*time+w.phase);
     }
     return h;
+  }
+
+  heightAt(x,z,time,storm){
+    return this.curvatureHeightAt(x,z)+this.waveHeightAt(x,z,time,storm);
   }
 
   dispose(){
