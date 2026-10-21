@@ -3,6 +3,7 @@ import * as THREE from 'three';
 const clamp01=(v)=>Math.max(0,Math.min(1,v));
 const smooth=(v)=>{v=clamp01(v);return v*v*(3-2*v);};
 const lerp=(a,b,t)=>THREE.MathUtils.lerp(Number(a)||0,Number(b)||0,t);
+const uid=(prefix)=>crypto.randomUUID?.()??`${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
 function snapshot(object){
   const out={
@@ -35,6 +36,7 @@ function easing(name,t){
 function cloneFrame(frame){
   return {
     ...frame,
+    id:frame.id||uid('key'),
     position:[...(frame.position||[0,0,0])],
     quaternion:[...(frame.quaternion||[0,0,0,1])],
     scale:[...(frame.scale||[1,1,1])],
@@ -62,6 +64,24 @@ export class SceneTimeline{
 
   ensureTrack(id){if(!this.tracks.has(id))this.tracks.set(id,[]);return this.tracks.get(id);}
 
+  snapshotObject(id){
+    const object=this.resolveObject(id);
+    if(!object)throw new Error(`Objet introuvable: ${id}`);
+    return snapshot(object);
+  }
+
+  getKeyframe(id,frameId){return this.tracks.get(id)?.find(k=>k.id===frameId)||null;}
+
+  findKeyframeNear(id,time=this.time,tolerance=.12){
+    const track=this.tracks.get(id)||[];
+    let best=null,bestDistance=Infinity;
+    for(const frame of track){
+      const d=Math.abs(frame.time-time);
+      if(d<bestDistance){best=frame;bestDistance=d;}
+    }
+    return bestDistance<=tolerance?best:null;
+  }
+
   captureKeyframe(id,time=this.time,{interpolation='smooth'}={}){
     const object=this.resolveObject(id);
     if(!object)throw new Error(`Objet introuvable: ${id}`);
@@ -70,25 +90,61 @@ export class SceneTimeline{
 
   addKeyframe(id,frame){
     const track=this.ensureTrack(id);
-    const normalized={
-      time:Math.max(0,Math.min(this.duration,Number(frame.time)||0)),
-      position:[...(frame.position||[0,0,0])],
-      quaternion:[...(frame.quaternion||[0,0,0,1])],
-      scale:[...(frame.scale||[1,1,1])],
-      interpolation:frame.interpolation||'smooth',
-      camera:frame.camera?{...frame.camera}:undefined
-    };
+    const normalized=this.#normalizeFrame(frame);
     const existing=track.findIndex(k=>Math.abs(k.time-normalized.time)<1e-4);
-    if(existing>=0)track[existing]=normalized;else track.push(normalized);
+    if(existing>=0){
+      normalized.id=track[existing].id||normalized.id;
+      track[existing]=normalized;
+    }else track.push(normalized);
     track.sort((a,b)=>a.time-b.time);
     this.onChange?.();
     return normalized;
   }
 
-  removeKeyframe(id,time,tolerance=.12){
+  updateKeyframe(id,frameId,patch,{evaluate=true}={}){
+    const track=this.tracks.get(id);
+    if(!track)throw new Error(`Piste introuvable: ${id}`);
+    const index=track.findIndex(k=>k.id===frameId);
+    if(index<0)throw new Error('Keyframe introuvable.');
+    const current=track[index];
+    const candidate=this.#normalizeFrame({...current,...patch,id:current.id});
+    const collision=track.find((k,i)=>i!==index&&Math.abs(k.time-candidate.time)<1e-4);
+    if(collision)throw new Error(`Une autre keyframe de ${id} existe déjà à ${candidate.time.toFixed(3)} s.`);
+    track[index]=candidate;
+    track.sort((a,b)=>a.time-b.time);
+    this.onChange?.();
+    if(evaluate)this.evaluate(this.time);
+    return candidate;
+  }
+
+  updateKeyframeFromObject(id,frameId,{time=null,interpolation=null}={}){
+    const object=this.resolveObject(id);
+    if(!object)throw new Error(`Objet introuvable: ${id}`);
+    const current=this.getKeyframe(id,frameId);
+    if(!current)throw new Error('Keyframe introuvable.');
+    return this.updateKeyframe(id,frameId,{
+      ...snapshot(object),
+      time:time??current.time,
+      interpolation:interpolation??current.interpolation
+    });
+  }
+
+  removeKeyframeById(id,frameId){
     const track=this.tracks.get(id);if(!track)return false;
-    const index=track.findIndex(k=>Math.abs(k.time-time)<=tolerance);if(index<0)return false;
+    const index=track.findIndex(k=>k.id===frameId);if(index<0)return false;
     track.splice(index,1);this.onChange?.();return true;
+  }
+
+  removeKeyframe(id,time,tolerance=.12){
+    const frame=this.findKeyframeNear(id,time,tolerance);
+    return frame?this.removeKeyframeById(id,frame.id):false;
+  }
+
+  previewFrame(id,frame,time=this.time){
+    const object=this.resolveObject(id);
+    if(!object)return;
+    this.#applyFrame(object,frame);
+    this.applyBindings(time);
   }
 
   addBinding({childId,targetId,start=this.time,end=this.time+2,blend=.25,axes=[true,true,true],followRotation=false,offset=null}={}){
@@ -98,22 +154,50 @@ export class SceneTimeline{
     const childWorld=new THREE.Vector3(),targetWorld=new THREE.Vector3();
     child.getWorldPosition(childWorld);target.getWorldPosition(targetWorld);
     const binding={
-      id:crypto.randomUUID?.()??`binding-${Date.now()}-${Math.random()}`,
+      id:uid('binding'),
       childId,targetId,
       start:Math.max(0,Number(start)||0),end:Math.min(this.duration,Number(end)||0),
       blend:Math.max(0,Number(blend)||0),axes:[...axes],followRotation:Boolean(followRotation),
       offset:offset?[...offset]:childWorld.sub(targetWorld).toArray()
     };
     if(binding.end<=binding.start)throw new Error('La fin de liaison doit être après le début.');
-    this.bindings.push(binding);this.onChange?.();return binding;
+    this.bindings.push(binding);this.onChange?.();this.evaluate(this.time);return binding;
   }
 
-  removeBinding(id){const n=this.bindings.length;this.bindings=this.bindings.filter(b=>b.id!==id);if(this.bindings.length!==n)this.onChange?.();}
+  removeBinding(id){
+    const n=this.bindings.length;this.bindings=this.bindings.filter(b=>b.id!==id);
+    if(this.bindings.length!==n){this.onChange?.();this.evaluate(this.time);}
+  }
+
+  activeBindingsAt(time=this.time){return this.bindings.filter(b=>time>=b.start&&time<=b.end);}
+  isBound(id,time=this.time){return this.activeBindingsAt(time).some(b=>b.childId===id);}
+
+  applyBindings(time=this.time){
+    const active=this.activeBindingsAt(time);
+    if(!active.length)return;
+
+    const byChild=new Map();
+    for(const binding of active){
+      if(!byChild.has(binding.childId))byChild.set(binding.childId,[]);
+      byChild.get(binding.childId).push(binding);
+    }
+    const ordered=[];
+    const permanent=new Set(),temporary=new Set();
+    const visit=(binding)=>{
+      if(permanent.has(binding.id))return;
+      if(temporary.has(binding.id))return;
+      temporary.add(binding.id);
+      for(const dependency of byChild.get(binding.targetId)||[])visit(dependency);
+      temporary.delete(binding.id);permanent.add(binding.id);ordered.push(binding);
+    };
+    for(const binding of active)visit(binding);
+    for(const binding of ordered)this.#applyBinding(binding,time);
+  }
 
   addCameraCut(cameraId,time=this.time){
     const object=this.resolveObject(cameraId);
     if(!object?.isPerspectiveCamera)throw new Error('La coupe doit cibler une caméra cinématique.');
-    const cut={id:crypto.randomUUID?.()??`cut-${Date.now()}-${Math.random()}`,cameraId,time:Math.max(0,Math.min(this.duration,Number(time)||0))};
+    const cut={id:uid('cut'),cameraId,time:Math.max(0,Math.min(this.duration,Number(time)||0))};
     const existing=this.cameraCuts.findIndex(c=>Math.abs(c.time-cut.time)<1e-4);
     if(existing>=0)this.cameraCuts[existing]=cut;else this.cameraCuts.push(cut);
     this.cameraCuts.sort((a,b)=>a.time-b.time);
@@ -140,7 +224,7 @@ export class SceneTimeline{
   addEffect({type='explosion',targetId=null,start=this.time,end=null,offset=[0,0,0],direction=[0,0,1],size=1,intensity=1}={}){
     const duration=type==='explosion'?1.15:3;
     const effect={
-      id:crypto.randomUUID?.()??`fx-${Date.now()}-${Math.random()}`,
+      id:uid('fx'),
       type:type==='rocketFlame'?'rocketFlame':'explosion',
       targetId:targetId||null,
       start:Math.max(0,Number(start)||0),
@@ -188,8 +272,20 @@ export class SceneTimeline{
 
   evaluate(time=this.time){
     for(const [id,track] of this.tracks){const object=this.resolveObject(id);if(!object||!track.length)continue;this.#evaluateTrack(object,track,time);}
-    for(const binding of this.bindings)this.#applyBinding(binding,time);
+    this.applyBindings(time);
     this.#evaluateCameraCut(time);
+  }
+
+  #normalizeFrame(frame){
+    return {
+      id:frame.id||uid('key'),
+      time:Math.max(0,Math.min(this.duration,Number(frame.time)||0)),
+      position:[...(frame.position||[0,0,0])],
+      quaternion:[...(frame.quaternion||[0,0,0,1])],
+      scale:[...(frame.scale||[1,1,1])],
+      interpolation:frame.interpolation||'smooth',
+      camera:frame.camera?{...frame.camera}:undefined
+    };
   }
 
   #evaluateTrack(object,track,time){
@@ -236,15 +332,15 @@ export class SceneTimeline{
     if(id!==this._lastCameraId){this._lastCameraId=id;this.onCameraCut?.(id,time);}
   }
 
-  toJSON(){return {version:2,duration:this.duration,loop:this.loop,tracks:Object.fromEntries([...this.tracks].map(([id,frames])=>[id,frames.map(cloneFrame)])),bindings:this.bindings,cameraCuts:this.cameraCuts,effects:this.effects};}
+  toJSON(){return {version:3,duration:this.duration,loop:this.loop,tracks:Object.fromEntries([...this.tracks].map(([id,frames])=>[id,frames.map(cloneFrame)])),bindings:this.bindings,cameraCuts:this.cameraCuts,effects:this.effects};}
 
   load(data){
-    if(!data||![1,2].includes(data.version))throw new Error('Format de timeline non reconnu.');
+    if(!data||![1,2,3].includes(data.version))throw new Error('Format de timeline non reconnu.');
     this.duration=Math.max(.1,Number(data.duration)||12);this.loop=Boolean(data.loop);
-    this.tracks=new Map(Object.entries(data.tracks||{}).map(([id,frames])=>[id,frames.map(cloneFrame)]));
-    this.bindings=(data.bindings||[]).map(b=>({...b,axes:[...(b.axes||[true,true,true])],offset:[...(b.offset||[0,0,0])]}));
-    this.cameraCuts=(data.cameraCuts||[]).map(c=>({...c})).sort((a,b)=>a.time-b.time);
-    this.effects=(data.effects||[]).map(f=>({...f,offset:[...(f.offset||[0,0,0])],direction:[...(f.direction||[0,0,1])]}));
+    this.tracks=new Map(Object.entries(data.tracks||{}).map(([id,frames])=>[id,frames.map(f=>this.#normalizeFrame(cloneFrame(f))).sort((a,b)=>a.time-b.time)]));
+    this.bindings=(data.bindings||[]).map(b=>({...b,id:b.id||uid('binding'),axes:[...(b.axes||[true,true,true])],offset:[...(b.offset||[0,0,0])]}));
+    this.cameraCuts=(data.cameraCuts||[]).map(c=>({...c,id:c.id||uid('cut')})).sort((a,b)=>a.time-b.time);
+    this.effects=(data.effects||[]).map(f=>({...f,id:f.id||uid('fx'),offset:[...(f.offset||[0,0,0])],direction:[...(f.direction||[0,0,1])]}));
     this.time=0;this.playing=false;this._lastCameraId=null;this.onChange?.();this.setTime(0,true);
   }
 }
