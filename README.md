@@ -67,13 +67,45 @@ Une keyframe d'un objet lié reste éditable comme animation de base, mais le re
 - export/import JSON ;
 - liaison temporaire d'un objet à un autre avec choix des axes et suivi optionnel de rotation.
 
-## Océan et pluie continus
+## Océan monde réel avec LOD adaptatif
 
-Le maillage d'océan est un patch large qui suit la caméra de rendu en X/Z. Les vagues sont calculées à partir des coordonnées monde, donc le déplacement du patch ne remet pas leur phase à zéro. Le brouillard masque progressivement les limites géométriques du patch.
+L'océan n'est plus un plan de taille fixe recentré à chaque image autour de la caméra.
 
-Le volume de pluie suit lui aussi la caméra active. Les gouttes sont recyclées autour de cette caméra individuellement, sans redémarrage collectif de l'animation.
+Il est maintenant représenté comme un **quadtree en coordonnées monde** couvrant un secteur d'environ **524 km × 524 km**. Le maillage réellement envoyé au GPU dépend de ce que voit la caméra : les tuiles proches sont subdivisées fortement, les tuiles lointaines sont beaucoup plus grossières.
 
-Ce système donne l'illusion d'un environnement très étendu dans les deux modes, sans devoir créer une surface ou un nuage de particules réellement infinis.
+Le critère de subdivision est calculé en **pixels projetés**. Il dépend donc réellement de :
+
+- la distance de la caméra ;
+- sa hauteur ;
+- la focale ;
+- le zoom ;
+- le champ de vision effectif ;
+- la hauteur du viewport.
+
+Ainsi, passer d'un grand-angle à un téléobjectif ne redimensionne pas artificiellement la mer. C'est la même mer en coordonnées monde ; seul son niveau de tessellation change pour conserver suffisamment de détail à l'écran.
+
+Les vagues utilisent elles aussi les coordonnées monde. Deux tuiles voisines évaluent donc exactement le même champ de vagues aux mêmes coordonnées. Des jupes géométriques masquent les raccords entre niveaux de LOD différents.
+
+Pour éviter un coût absurde, seules les feuilles visibles du quadtree sont instanciées. Les paramètres principaux sont dans `src/core/Ocean.js` :
+
+```js
+rootSize: 524288,
+minTileSize: 8,
+segments: 12,
+targetTilePixels: 190,
+maxLeaves: 6500
+```
+
+- diminuer `minTileSize` augmente le détail maximal ;
+- augmenter `segments` augmente la densité géométrique de chaque tuile ;
+- diminuer `targetTilePixels` force davantage de subdivisions ;
+- augmenter `maxLeaves` autorise plus de tuiles simultanément visibles.
+
+Ces réglages peuvent devenir très coûteux en CPU/GPU. Le système est volontairement conçu pour permettre de pousser la qualité très haut sur une machine puissante sans transformer l'océan en simple décor collé à la caméra.
+
+Les caméras éditeur et cinéma ont maintenant un plan lointain étendu pour pouvoir voir ce grand espace océanique. Le brouillard reste présent comme effet atmosphérique, mais il n'est plus utilisé pour cacher la limite d'un petit plan de mer.
+
+La pluie reste un volume particulaire recyclé autour de la caméra active : contrairement à l'océan, il n'est pas utile de matérialiser des gouttes sur des centaines de kilomètres puisque seules celles proches de la caméra peuvent être perçues.
 
 ## Effets localisés
 
@@ -160,4 +192,4 @@ src/
     └── SceneEditor.js
 ```
 
-`SceneTimeline` reste indépendant du rendu. `OceanWorld` applique ensuite la flottabilité, le recentrage de l'océan/pluie, les effets et le rendu depuis la caméra choisie.
+`SceneTimeline` reste indépendant du rendu. `OceanWorld` applique ensuite la flottabilité, le LOD de l'océan en fonction de la caméra, la pluie, les effets et le rendu depuis la caméra choisie.
