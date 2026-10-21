@@ -10,7 +10,7 @@ python3 server.py
 
 Puis ouvre `http://127.0.0.1:8000/`.
 
-Le serveur Python n'effectue aucun appel réseau sortant. Le navigateur ne contacte que `cdn.jsdelivr.net` pour les modules JavaScript Three.js/GSAP réellement utilisés. Les modèles, textures et fichiers de timeline restent locaux ou servis par le même serveur.
+Le serveur Python n'effectue aucun appel réseau sortant. Le navigateur ne contacte que `cdn.jsdelivr.net` pour les modules JavaScript Three.js/GSAP réellement utilisés. Les modèles, textures et timelines restent locaux ou servis par le même serveur.
 
 ## Mode éditeur / mode cinématique
 
@@ -19,93 +19,84 @@ Deux vues sont disponibles :
 - **Éditeur** : caméra OrbitControls, gizmos de translation/rotation/échelle et sélection des objets ;
 - **Vue caméra** : rendu depuis la caméra cinématique active choisie par les coupes de la timeline.
 
-La timeline peut contenir plusieurs caméras. Chaque caméra est un objet éditable avec ses propres keyframes. Un keyframe de caméra enregistre position, rotation, focale en mm, zoom, distance de mise au point, aperture du pass DOF, blur maximal et activation de la profondeur de champ.
+Chaque caméra possède ses propres keyframes de position, rotation, focale, zoom, distance de mise au point, aperture DOF, blur maximal et activation de la profondeur de champ. La piste **CAM CUT** choisit la caméra utilisée à chaque instant.
 
-La piste spéciale **CAM CUT** choisit la caméra utilisée à chaque instant. Ajoute une coupe au playhead avec **Cut au playhead**.
-
-La profondeur de champ utilise `BokehPass` de Three.js et n'est calculée que dans la vue cinématique lorsqu'elle est activée pour la caméra courante.
+La profondeur de champ utilise `BokehPass` de Three.js et n'est calculée que dans la vue cinématique lorsqu'elle est activée.
 
 ## Keyframes éditables
 
-Chaque keyframe possède maintenant un identifiant stable. Un clic sur le losange d'une keyframe sélectionne **cette keyframe précise et uniquement celle de sa piste**.
+Chaque keyframe possède un identifiant stable. Un clic sur le losange sélectionne **cette keyframe précise et uniquement celle de sa piste**.
 
-Pendant cette sélection :
+Tu peux ensuite modifier l'objet avec le gizmo ou l'inspecteur puis cliquer sur **Enregistrer cette keyframe**. Déplacer le playhead avant l'enregistrement déplace également la keyframe dans le temps. Une collision avec une autre keyframe du même objet est refusée au lieu d'écraser silencieusement cette dernière.
 
-1. modifie la position, la rotation ou l'échelle avec le gizmo ou l'inspecteur ;
-2. pour une caméra, modifie aussi la focale, le zoom et la profondeur de champ ;
-3. tu peux déplacer le playhead vers un autre temps pour déplacer cette keyframe dans la timeline ;
-4. change éventuellement son interpolation ;
-5. le bouton principal devient **Enregistrer cette keyframe**.
+## Priorité des contraintes
 
-La sauvegarde met à jour la keyframe sélectionnée **en place** : aucune autre keyframe de l'objet, et aucune piste d'un autre objet, n'est modifiée.
-
-Si une autre keyframe du même objet existe déjà exactement au temps de destination, l'éditeur refuse la collision au lieu d'écraser silencieusement cette autre keyframe.
-
-## Priorité des liaisons
-
-L'évaluation de la timeline est volontairement séparée en couches :
+L'ordre d'évaluation est :
 
 ```text
-1. keyframes / interpolation des objets
-2. liaisons temporaires et contraintes
-3. sélection de la caméra de rendu
+1. keyframes / interpolation
+2. liaisons objet → objet
+3. contrainte verticale objet → surface de la mer
+4. sélection de la caméra de rendu
 ```
 
-Les liaisons sont donc toujours appliquées **après** les keyframes et ont priorité sur elles pendant leur intervalle actif.
+Les contraintes ont donc priorité sur les valeurs interpolées des keyframes. Une liaison objet → objet peut piloter X/Z/rotation, puis le suivi de mer peut remplacer uniquement la hauteur Y avec la surface réelle calculée au X/Z résultant.
 
-Une keyframe d'un objet lié reste éditable comme animation de base, mais le rendu final de cet objet suit quand même la liaison sur l'intervalle concerné. En cas de chaîne de liaisons, les cibles liées sont résolues avant leurs enfants. Si plusieurs liaisons actives pilotent le même enfant, la dernière créée est appliquée en dernier et possède donc la priorité finale.
+## Suivi vertical de la mer par keyframes
 
-## Timeline objet
+Un objet chargé **sans** l'option `Flotte sur l'océan` peut recevoir une contrainte verticale animable :
 
-- sélection d'un objet depuis la liste ou dans la vue 3D ;
-- gizmos Three.js pour translation, rotation et échelle ;
-- timeline visuelle multi-objets ;
-- keyframes position + quaternion + échelle ;
-- édition directe des keyframes existantes ;
-- interpolation automatique `smooth`, `linear`, `easeIn`, `easeOut` ou `step` ;
-- lecture, scrubbing, boucle et durée réglable ;
-- export/import JSON ;
-- liaison temporaire d'un objet à un autre avec choix des axes et suivi optionnel de rotation.
+1. place le playhead au moment voulu ;
+2. sélectionne l'objet ;
+3. règle éventuellement un offset vertical ;
+4. clique sur **Activer au playhead** ;
+5. plus loin dans la timeline, clique sur **Désactiver au playhead**.
 
-## Océan monde réel avec LOD adaptatif
+Pendant la période active :
 
-L'océan n'est plus un plan de taille fixe recentré à chaque image autour de la caméra.
+```text
+Y objet = hauteur courbe de la mer(X,Z) + vague(X,Z,t) + offset
+```
 
-Il est maintenant représenté comme un **quadtree en coordonnées monde** couvrant un secteur d'environ **524 km × 524 km**. Le maillage réellement envoyé au GPU dépend de ce que voit la caméra : les tuiles proches sont subdivisées fortement, les tuiles lointaines sont beaucoup plus grossières.
+Le suivi est recalculé **à chaque frame de rendu**, donc l'objet suit réellement les vagues même si le playhead est arrêté. Quand la contrainte est désactivée, la transformation provenant des keyframes reprend la main.
 
-Le critère de subdivision est calculé en **pixels projetés**. Il dépend donc réellement de :
+Les bateaux créés avec la flottabilité permanente n'utilisent pas cette contrainte supplémentaire, afin d'éviter une double application de la hauteur d'eau.
 
-- la distance de la caméra ;
-- sa hauteur ;
-- la focale ;
-- le zoom ;
-- le champ de vision effectif ;
-- la hauteur du viewport.
+## Océan monde, LOD et courbure terrestre
 
-Ainsi, passer d'un grand-angle à un téléobjectif ne redimensionne pas artificiellement la mer. C'est la même mer en coordonnées monde ; seul son niveau de tessellation change pour conserver suffisamment de détail à l'écran.
+La mer n'est plus un plan collé à la caméra. C'est une surface en coordonnées monde découpée par un **quadtree LOD**.
 
-Les vagues utilisent elles aussi les coordonnées monde. Deux tuiles voisines évaluent donc exactement le même champ de vagues aux mêmes coordonnées. Des jupes géométriques masquent les raccords entre niveaux de LOD différents.
+Le niveau de détail dépend de la projection réelle de la caméra : distance, hauteur, taille du viewport, champ de vision effectif, focale et zoom. Un téléobjectif force donc davantage de subdivisions sur une zone lointaine qui occupe beaucoup de pixels, tandis qu'un grand-angle permet de réduire le détail là où il devient invisible.
 
-Pour éviter un coût absurde, seules les feuilles visibles du quadtree sont instanciées. Les paramètres principaux sont dans `src/core/Ocean.js` :
+Paramètres principaux dans `Ocean.js` :
 
 ```js
-rootSize: 524288,
+rootSize: 2097152,
+rootStride: 262144,
 minTileSize: 8,
 segments: 12,
 targetTilePixels: 190,
-maxLeaves: 6500
+maxLeaves: 6500,
+earthRadius: 6371000
 ```
 
-- diminuer `minTileSize` augmente le détail maximal ;
-- augmenter `segments` augmente la densité géométrique de chaque tuile ;
-- diminuer `targetTilePixels` force davantage de subdivisions ;
-- augmenter `maxLeaves` autorise plus de tuiles simultanément visibles.
+La surface utilise maintenant une sphère terrestre de rayon **6 371 km** tangente au niveau `Y = 0` à l'origine :
 
-Ces réglages peuvent devenir très coûteux en CPU/GPU. Le système est volontairement conçu pour permettre de pousser la qualité très haut sur une machine puissante sans transformer l'océan en simple décor collé à la caméra.
+```text
+y(x,z) = sqrt(R² - x² - z²) - R
+```
 
-Les caméras éditeur et cinéma ont maintenant un plan lointain étendu pour pouvoir voir ce grand espace océanique. Le brouillard reste présent comme effet atmosphérique, mais il n'est plus utilisé pour cacher la limite d'un petit plan de mer.
+Les vagues sont ensuite ajoutées à cette altitude. Cela produit un véritable horizon géométrique : avec une caméra basse, la mer disparaît naturellement derrière la courbure au lieu d'être simplement masquée par un brouillard ou limitée par un plan.
 
-La pluie reste un volume particulaire recyclé autour de la caméra active : contrairement à l'océan, il n'est pas utile de matérialiser des gouttes sur des centaines de kilomètres puisque seules celles proches de la caméra peuvent être perçues.
+Le maillage LOD couvre actuellement un secteur d'environ **2 097 km de côté**, mais seules les feuilles visibles du quadtree sont envoyées au GPU. Le brouillard reste très léger et sert à l'atmosphère, pas à cacher la fin de la géométrie.
+
+Des skirts sont ajoutés aux tuiles pour masquer les fissures entre deux niveaux de LOD. Les petites longueurs d'onde sont également atténuées sur les tuiles très grossières afin d'éviter d'animer des détails impossibles à représenter géométriquement.
+
+> À des distances planétaires extrêmes, il faudra passer à un système de coordonnées flottantes / floating origin. La version actuelle vise les scènes cinématiques allant de quelques mètres à plusieurs centaines de kilomètres autour de l'origine.
+
+## Pluie
+
+La pluie reste un volume local recyclé autour de la caméra de rendu. Les gouttes sont réutilisées individuellement, ce qui permet de parcourir la scène sans rencontrer la bordure d'un bloc de pluie gigantesque.
 
 ## Effets localisés
 
@@ -113,62 +104,53 @@ La timeline possède une piste **FX**.
 
 ### Explosion
 
-Une explosion peut être placée en coordonnées monde, attachée à un modèle avec un offset local, limitée à un intervalle de temps, et réglée en taille et intensité. L'effet est procédural : sprite lumineux, particules et lumière ponctuelle. Aucun asset externe n'est téléchargé.
+Une explosion peut être placée en coordonnées monde ou attachée à un modèle avec un offset local. Elle possède une durée, une taille et une intensité. L'effet procédural combine sprite lumineux, particules et lumière ponctuelle.
 
-### Flamme de moteur fusée
+### Flamme moteur fusée
 
-Une flamme peut être attachée à un modèle et suit son mouvement, sa rotation et, pour un bateau, son root de flottabilité. Son offset et sa direction sont exprimés dans le repère local de la cible.
-
-La direction par défaut est `+Z` :
-
-```text
-X = 0
-Y = 0
-Z = 1
-```
-
-Inverse `Z` si l'orientation de ton modèle exige une flamme vers `-Z`.
+Une flamme peut être attachée à un modèle et suit son mouvement et sa rotation. Son offset et sa direction sont exprimés dans le repère local de la cible.
 
 ## GLB / textures
 
-`GLTFLoader` conserve les matériaux PBR et les textures du GLB. Les matériaux glTF ne sont pas remplacés par l'éditeur. Les textures reçoivent également une anisotropie adaptée au GPU.
+`GLTFLoader` conserve les matériaux PBR et textures du GLB. Les matériaux glTF ne sont pas remplacés par l'éditeur et les textures reçoivent une anisotropie adaptée au GPU.
 
-Pour un `.glb`, sélectionne simplement le fichier.
+Pour un `.glb`, sélectionne simplement le fichier. Pour un `.gltf` avec ressources externes, sélectionne en une fois le `.gltf`, son `.bin` et ses images. Pour OBJ, sélectionne `.obj`, `.mtl` et textures ensemble.
 
-Pour un `.gltf` avec ressources externes, sélectionne en une fois le `.gltf`, son `.bin` et ses images. L'éditeur résout les chemins via des URL `blob:` locales.
-
-Pour OBJ, sélectionne `.obj`, `.mtl` et textures ensemble.
-
-> Les variantes nécessitant des décodeurs supplémentaires comme Draco/KTX2 ne sont pas activées pour l'instant afin de conserver la politique réseau minimale.
+> Draco/KTX2 ne sont pas activés pour l'instant afin de conserver la politique réseau minimale.
 
 ## Format timeline JSON
 
-Le format courant est `version: 3`. La version 3 ajoute un identifiant stable aux keyframes pour permettre leur édition ciblée :
+Le format courant est `version: 4`. Il ajoute `oceanFollows` aux versions précédentes :
 
 ```json
 {
-  "version": 3,
+  "version": 4,
   "duration": 12,
   "loop": false,
-  "tracks": {
-    "main-boat": [
-      {
-        "id": "key-...",
-        "time": 0,
-        "position": [0, 0, -6],
-        "quaternion": [0, 0, 0, 1],
-        "scale": [1, 1, 1],
-        "interpolation": "smooth"
-      }
-    ]
-  },
+  "tracks": {},
   "bindings": [],
+  "oceanFollows": [
+    {
+      "id": "sea-...",
+      "objectId": "rocket",
+      "time": 2.0,
+      "enabled": true,
+      "offset": 4.5
+    },
+    {
+      "id": "sea-...",
+      "objectId": "rocket",
+      "time": 7.0,
+      "enabled": false,
+      "offset": 4.5
+    }
+  ],
   "cameraCuts": [],
   "effects": []
 }
 ```
 
-Les timelines `version: 1` et `version: 2` restent importables. Des identifiants de keyframes sont générés automatiquement à l'import.
+Les timelines `version: 1`, `2` et `3` restent importables.
 
 ## Architecture
 
@@ -176,6 +158,7 @@ Les timelines `version: 1` et `version: 2` restent importables. Des identifiants
 src/
 ├── main.js
 ├── styles.css
+├── ocean-follow.css
 ├── core/
 │   ├── Boat.js
 │   ├── CameraController.js
@@ -191,5 +174,3 @@ src/
 └── editor/
     └── SceneEditor.js
 ```
-
-`SceneTimeline` reste indépendant du rendu. `OceanWorld` applique ensuite la flottabilité, le LOD de l'océan en fonction de la caméra, la pluie, les effets et le rendu depuis la caméra choisie.
