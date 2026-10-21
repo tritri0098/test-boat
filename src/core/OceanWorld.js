@@ -26,6 +26,7 @@ export class OceanWorld{
     this.objects=new Map();this.boats=new Map();this.activeObjectId=null;this.timeline=null;
     this.effects=new EffectsManager(this.scene,{resolveTarget:(id)=>this.getEffectTarget(id)});
     this.onObjectsChanged=null;this.onTick=null;this.onViewModeChanged=null;
+    this._seaTmpWorld=new THREE.Vector3();this._seaTmpLocal=new THREE.Vector3();
 
     this.#createSky();this.#createLights();this.#createClouds();
     this.running=true;this.time=0;this.last=performance.now();
@@ -98,9 +99,21 @@ export class OceanWorld{
     add(-20,9,-28,1.5);add(3,11,-35,1.1);add(21,8,-24,1.25);add(-4,15,-48,2.0);add(28,13,-52,1.8);
   }
 
-  #resize(){
-    const r=this.viewport.getBoundingClientRect();if(!r.width||!r.height)return;
-    this.renderer.setSize(r.width,r.height,false);this.cameraManager.resize(r.width,r.height);
+  #resize(){const r=this.viewport.getBoundingClientRect();if(!r.width||!r.height)return;this.renderer.setSize(r.width,r.height,false);this.cameraManager.resize(r.width,r.height);}
+
+  #applyOceanFollowConstraints(storm){
+    if(!this.timeline)return;
+    for(const follow of this.timeline.activeOceanFollowsAt(this.timeline.time)){
+      const actor=this.objects.get(follow.objectId);
+      // Boats already use their own buoyancy root. This extra constraint is for
+      // arbitrary non-floating scene objects imported with floating=false.
+      if(!actor||actor.kind==='camera'||actor.kind==='boat')continue;
+      const object=actor.object;
+      object.getWorldPosition(this._seaTmpWorld);
+      const targetY=this.ocean.heightAt(this._seaTmpWorld.x,this._seaTmpWorld.z,this.time,storm)+follow.offset;
+      this._seaTmpLocal.set(this._seaTmpWorld.x,targetY,this._seaTmpWorld.z);
+      if(object.parent){object.parent.worldToLocal(this._seaTmpLocal);object.position.copy(this._seaTmpLocal);}else object.position.copy(this._seaTmpLocal);
+    }
   }
 
   #frame(now){
@@ -110,10 +123,7 @@ export class OceanWorld{
     const renderCamera=this.getRenderCamera();const s=this.weather.state;
     const viewportHeight=Math.max(1,this.renderer.domElement.clientHeight||this.viewport.getBoundingClientRect().height||720);
 
-    // Much weaker fog than before: the sea now truly extends through a large
-    // world-space quadtree. Fog is atmospheric, not a trick to hide a 360 m patch.
-    this.scene.fog.color.setRGB(.73-s.storm*.34,.84-s.storm*.42,.88-s.storm*.46);
-    this.scene.fog.density=.000014+s.storm*.000018;
+    this.scene.fog.color.setRGB(.73-s.storm*.34,.84-s.storm*.42,.88-s.storm*.46);this.scene.fog.density=.000014+s.storm*.000018;
     this.ocean.update(this.time,s.storm,renderCamera,this.scene.fog,viewportHeight);
 
     this.skyUniforms.uStorm.value=s.storm;this.sky.position.copy(renderCamera.position);
@@ -123,6 +133,10 @@ export class OceanWorld{
     for(let i=0;i<this.clouds.length;i++){const c=this.clouds[i];c.position.x+=dt*(.08+i*.018)*(1+s.wind*.08);if(c.position.x>42)c.position.x=-42;}
 
     for(const actor of this.objects.values())actor.update(this.time,s.storm,dt||.0001);
+    // Constraint priority: keyframes -> object bindings -> sea-height constraint.
+    // The sea constraint runs every render frame so the object follows moving waves
+    // even when the timeline playhead itself is paused.
+    this.#applyOceanFollowConstraints(s.storm);
     this.rain.update(dt,s.rain,s.wind,renderCamera);
     this.effects.update(this.timeline?.time??this.time,this.timeline?.effects??[]);
     this.cameraManager.render();
