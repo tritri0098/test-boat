@@ -4,22 +4,25 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'" />
-  <title>Ocean Scene Creator</title>
+  <title>Ocean Cinematic Scene Creator</title>
   <link rel="stylesheet" href="./src/styles.css" />
 </head>
 <body>
 <main class="app-shell">
   <header class="hero">
-    <div><p class="eyebrow">Three.js + GSAP</p><h1>Ocean Scene Creator</h1><p class="lede">Place tes objets dans la vue 3D, pose des keyframes sur la timeline et crée des liaisons temporaires entre objets.</p></div>
+    <div><p class="eyebrow">Three.js + GSAP</p><h1>Ocean Cinematic Scene Creator</h1><p class="lede">Édition 3D, keyframes, multi-caméras, coupes cinématiques, profondeur de champ, effets localisés et environnement océan/pluie à horizon continu.</p></div>
     <div id="webgl-status" class="status-pill">Initialisation…</div>
   </header>
 
   <section class="workspace">
     <div class="viewer-card">
       <div id="viewport" class="viewport">
-        <div class="scene-hud"><strong>Édition 3D</strong><span>Glisse les gizmos · orbite avec la souris / le doigt</span></div>
+        <div class="scene-hud"><strong>Édition 3D</strong><span>Gizmos + OrbitControls</span></div>
       </div>
       <div class="viewport-toolbar">
+        <button id="view-editor" type="button" class="active">🛠 Éditeur</button>
+        <button id="view-cinematic" type="button">🎬 Vue caméra</button>
+        <span class="toolbar-divider"></span>
         <button type="button" data-transform-mode="translate" class="active">Déplacer</button>
         <button type="button" data-transform-mode="rotate">Tourner</button>
         <button type="button" data-transform-mode="scale">Échelle</button>
@@ -31,7 +34,7 @@
 
     <aside class="side-panel">
       <section class="panel compact">
-        <div class="panel-heading"><h2>Objets</h2><span>Sélection</span></div>
+        <div class="panel-heading"><h2>Objets</h2><span>Modèles + caméras</span></div>
         <div id="editor-object-list" class="object-list"></div>
         <div class="row"><button id="add-procedural" type="button">+ Bateau test</button><button id="remove-object" type="button" class="danger">Supprimer</button></div>
       </section>
@@ -39,17 +42,15 @@
       <section class="panel compact">
         <div class="panel-heading"><h2>Importer un modèle</h2><span>GLB · GLTF · OBJ</span></div>
         <label>Nom <input id="asset-name" type="text" placeholder="mon-bateau" /></label>
-        <label class="file-label">Fichiers
-          <input id="model-files" type="file" multiple accept=".glb,.gltf,.bin,.obj,.mtl,.png,.jpg,.jpeg,.webp" />
-        </label>
+        <label class="file-label">Fichiers <input id="model-files" type="file" multiple accept=".glb,.gltf,.bin,.obj,.mtl,.png,.jpg,.jpeg,.webp" /></label>
         <small id="selected-files" class="muted">Aucun fichier</small>
         <label class="check"><input id="asset-floating" type="checkbox" checked /> Flotte sur l'océan</label>
         <button id="load-model" type="button" class="primary">Charger</button>
-        <p class="hint">Un GLB conserve ses matériaux et textures embarquées. Pour un GLTF/OBJ, sélectionne en même temps ses textures, .bin et/ou .mtl.</p>
+        <p class="hint">Un GLB conserve ses matériaux et textures embarquées. Pour GLTF/OBJ, sélectionne aussi les .bin/.mtl et textures dans le même lot.</p>
       </section>
 
       <section class="panel compact">
-        <div class="panel-heading"><h2>Transform</h2><span>Objet sélectionné</span></div>
+        <div class="panel-heading"><h2>Transform</h2><span>Sélection</span></div>
         <div id="transform-inspector" class="transform-grid">
           <label>X <input data-transform="px" type="number" step=".1"></label><label>Y <input data-transform="py" type="number" step=".1"></label><label>Z <input data-transform="pz" type="number" step=".1"></label>
           <label>RX° <input data-transform="rx" type="number" step="1"></label><label>RY° <input data-transform="ry" type="number" step="1"></label><label>RZ° <input data-transform="rz" type="number" step="1"></label>
@@ -58,6 +59,22 @@
         <label>Interpolation du prochain keyframe
           <select id="key-ease"><option value="smooth">Smooth</option><option value="linear">Linear</option><option value="easeIn">Ease in</option><option value="easeOut">Ease out</option><option value="step">Step</option></select>
         </label>
+      </section>
+
+      <section class="panel compact camera-panel">
+        <div class="panel-heading"><h2>Caméras cinéma</h2><span>Multi-camera</span></div>
+        <label>Caméra <select id="camera-select"></select></label>
+        <div class="row"><button id="add-camera" type="button">+ Caméra</button><button id="remove-camera" type="button" class="danger">Supprimer</button></div>
+        <div class="row"><button id="add-camera-cut" type="button" class="primary">🎬 Cut au playhead</button><button id="remove-camera-cut" type="button">Suppr. cut proche</button></div>
+        <div id="camera-lens-panel" class="camera-lens-grid disabled-panel">
+          <label>Focale mm <input id="camera-focal" type="number" min="1" step="1" value="35"></label>
+          <label>Zoom <input id="camera-zoom" type="number" min=".05" step=".05" value="1"></label>
+          <label>Distance focus <input id="camera-focus" type="number" min=".01" step=".1" value="12"></label>
+          <label>Aperture DOF <input id="camera-aperture" type="number" min="0" step=".00001" value=".00018"></label>
+          <label>Max blur <input id="camera-maxblur" type="number" min="0" step=".001" value=".009"></label>
+          <label class="check"><input id="camera-dof" type="checkbox"> Profondeur de champ</label>
+        </div>
+        <p class="hint">Position, rotation, focale, zoom et paramètres DOF sont capturés dans les keyframes de la caméra. Les coupes CAM CUT choisissent quelle caméra est rendue à chaque instant.</p>
       </section>
     </aside>
   </section>
@@ -69,31 +86,40 @@
       <div class="row"><button id="timeline-export" type="button">Exporter JSON</button><label class="file-button">Importer JSON<input id="timeline-import" type="file" accept="application/json,.json"></label></div>
     </div>
     <input id="timeline-scrub" class="scrub" type="range" min="0" max="12" step=".01" value="0" />
-    <div class="timeline-scroll">
-      <div class="timeline-stage">
-        <div id="timeline-ruler" class="timeline-ruler"></div>
-        <div id="timeline-rows"></div>
-        <div id="timeline-playhead" class="timeline-playhead"></div>
-      </div>
-    </div>
+    <div class="timeline-scroll"><div class="timeline-stage"><div id="timeline-ruler" class="timeline-ruler"></div><div id="timeline-rows"></div><div id="timeline-playhead" class="timeline-playhead"></div></div></div>
   </section>
 
   <section class="lower-grid">
     <section class="panel">
-      <div class="panel-heading"><h2>Liaison temporaire</h2><span>Follow / detach automatique</span></div>
-      <p class="hint">L'objet sélectionné suit la position de la cible pendant l'intervalle. Un fondu aux deux extrémités évite un saut brutal au branchement/débranchement.</p>
+      <div class="panel-heading"><h2>Liaison temporaire</h2><span>Follow / detach</span></div>
+      <p class="hint">L'objet sélectionné peut suivre la cible uniquement sur l'intervalle choisi, avec fondu d'attache/détache.</p>
       <div class="binding-form">
-        <label>Cible <select id="binding-target"></select></label>
-        <label>Début <input id="binding-start" type="number" min="0" step=".1" value="2"></label>
-        <label>Fin <input id="binding-end" type="number" min="0" step=".1" value="5"></label>
-        <label>Fondu <input id="binding-blend" type="number" min="0" step=".05" value=".25"></label>
+        <label>Cible <select id="binding-target"></select></label><label>Début <input id="binding-start" type="number" min="0" step=".1" value="2"></label><label>Fin <input id="binding-end" type="number" min="0" step=".1" value="5"></label><label>Fondu <input id="binding-blend" type="number" min="0" step=".05" value=".25"></label>
       </div>
       <div class="row checks"><label class="check"><input id="bind-x" type="checkbox" checked>X</label><label class="check"><input id="bind-y" type="checkbox" checked>Y</label><label class="check"><input id="bind-z" type="checkbox" checked>Z</label><label class="check"><input id="bind-rotation" type="checkbox">Rotation</label><button id="add-binding" type="button" class="primary">Créer la liaison</button></div>
       <div id="binding-list" class="binding-list"></div>
     </section>
 
+    <section class="panel effects-panel">
+      <div class="panel-heading"><h2>Effets localisés</h2><span>Explosion · moteur fusée</span></div>
+      <div class="effect-grid">
+        <label>Type <select id="effect-type"><option value="explosion">Explosion</option><option value="rocketFlame">Flamme moteur fusée</option></select></label>
+        <label>Cible <select id="effect-target"><option value="">Monde / position absolue</option></select></label>
+        <label>Début <input id="effect-start" type="number" min="0" step=".1" value="2"></label>
+        <label>Fin <input id="effect-end" type="number" min="0" step=".1" value="3.15"></label>
+        <label>Taille <input id="effect-size" type="number" min=".01" step=".1" value="1"></label>
+        <label>Intensité <input id="effect-intensity" type="number" min="0" step=".1" value="1"></label>
+      </div>
+      <h3>Position / offset local</h3>
+      <div class="xyz-grid"><label>X <input id="effect-x" type="number" step=".1" value="0"></label><label>Y <input id="effect-y" type="number" step=".1" value="0"></label><label>Z <input id="effect-z" type="number" step=".1" value="0"></label></div>
+      <h3>Direction flamme (repère local)</h3>
+      <div class="xyz-grid"><label>X <input id="effect-dx" type="number" step=".1" value="0"></label><label>Y <input id="effect-dy" type="number" step=".1" value="0"></label><label>Z <input id="effect-dz" type="number" step=".1" value="1"></label></div>
+      <div class="row"><button id="effect-use-selection" type="button">Attacher à la sélection</button><button id="add-effect" type="button" class="primary">Ajouter l'effet</button></div>
+      <div id="effect-list" class="binding-list"></div>
+    </section>
+
     <section class="panel">
-      <div class="panel-heading"><h2>Météo</h2><span>Indépendante de la timeline objets</span></div>
+      <div class="panel-heading"><h2>Météo</h2><span>Océan et pluie suivent la caméra</span></div>
       <div class="row"><button id="weather-calm" type="button">☀️ Calme</button><button id="weather-storm" type="button">⛈️ Tempête</button></div>
       <div class="weather-grid">
         <label>Tempête <input data-weather="storm" type="range" min="0" max="1" step=".01" value="0"></label>
@@ -102,6 +128,7 @@
         <label>Nuages <input data-weather="cloud" type="range" min="0" max="1" step=".01" value=".12"></label>
       </div>
       <div class="telemetry"><div><small>Vagues</small><b id="wave-value">0,2 m</b></div><div><small>Vent</small><b id="wind-value">3 m/s</b></div><div><small>Pluie</small><b id="rain-value">0 %</b></div></div>
+      <p class="hint">Le patch océanique et le volume de pluie se recentrent autour de la caméra de rendu. Les vagues utilisent les coordonnées monde, donc leur phase reste continue quand la caméra se déplace.</p>
     </section>
   </section>
 </main>
