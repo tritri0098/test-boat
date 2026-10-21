@@ -10,7 +10,7 @@
 <body>
 <main class="app-shell">
   <header class="hero">
-    <div><p class="eyebrow">Three.js + GSAP</p><h1>Ocean Cinematic Scene Creator</h1><p class="lede">Édition 3D, keyframes, multi-caméras, coupes cinématiques, profondeur de champ, effets localisés et environnement océan/pluie à horizon continu.</p></div>
+    <div><p class="eyebrow">Three.js + GSAP</p><h1>Ocean Cinematic Scene Creator</h1><p class="lede">Édition 3D, keyframes, multi-caméras, coupes cinématiques, profondeur de champ, effets localisés, océan LOD courbe et contraintes animables.</p></div>
     <div id="webgl-status" class="status-pill">Initialisation…</div>
   </header>
 
@@ -100,6 +100,15 @@
       <div id="binding-list" class="binding-list"></div>
     </section>
 
+    <section class="panel">
+      <div class="panel-heading"><h2>Hauteur liée à la mer</h2><span>Keyframes ON / OFF</span></div>
+      <p class="hint">Pour un objet chargé sans flottabilité : pose une keyframe ON pour que son Y suive la surface réelle de la mer, puis une keyframe OFF pour rendre la main à son animation normale.</p>
+      <label>Décalage vertical au-dessus de l'eau <input id="sea-follow-offset" type="number" step=".1" value="0"></label>
+      <div class="row"><button id="sea-follow-enable" type="button" class="primary">🌊 Activer au playhead</button><button id="sea-follow-disable" type="button">Désactiver au playhead</button></div>
+      <p id="sea-follow-status" class="hint">Sélectionne un objet non flottant.</p>
+      <div id="sea-follow-list" class="binding-list"></div>
+    </section>
+
     <section class="panel effects-panel">
       <div class="panel-heading"><h2>Effets localisés</h2><span>Explosion · moteur fusée</span></div>
       <div class="effect-grid">
@@ -119,7 +128,7 @@
     </section>
 
     <section class="panel">
-      <div class="panel-heading"><h2>Météo</h2><span>Océan et pluie suivent la caméra</span></div>
+      <div class="panel-heading"><h2>Météo</h2><span>Océan monde · pluie caméra</span></div>
       <div class="row"><button id="weather-calm" type="button">☀️ Calme</button><button id="weather-storm" type="button">⛈️ Tempête</button></div>
       <div class="weather-grid">
         <label>Tempête <input data-weather="storm" type="range" min="0" max="1" step=".01" value="0"></label>
@@ -128,7 +137,7 @@
         <label>Nuages <input data-weather="cloud" type="range" min="0" max="1" step=".01" value=".12"></label>
       </div>
       <div class="telemetry"><div><small>Vagues</small><b id="wave-value">0,2 m</b></div><div><small>Vent</small><b id="wind-value">3 m/s</b></div><div><small>Pluie</small><b id="rain-value">0 %</b></div></div>
-      <p class="hint">Le patch océanique et le volume de pluie se recentrent autour de la caméra de rendu. Les vagues utilisent les coordonnées monde, donc leur phase reste continue quand la caméra se déplace.</p>
+      <p class="hint">La mer est une surface monde courbe avec LOD adaptatif selon la caméra. La pluie reste un volume recyclé autour de la caméra de rendu.</p>
     </section>
   </section>
 </main>
