@@ -2,143 +2,110 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'" />
-  <title>Three.js Ocean SlideDeck</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; connect-src 'self' https://cdn.jsdelivr.net blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'" />
+  <title>Ocean Scene Creator</title>
   <link rel="stylesheet" href="./src/styles.css" />
 </head>
 <body>
-  <main class="app-shell">
-    <section class="hero">
-      <div>
-        <p class="eyebrow">Three.js + GSAP</p>
-        <h1>Ocean SlideDeck</h1>
-        <p class="lede">Scène 3D modulaire : mer animée, météo, caméra live, plusieurs bateaux et chargement GLB/GLTF/OBJ.</p>
-      </div>
-      <div id="webgl-status" class="status-pill">Initialisation…</div>
-    </section>
+<main class="app-shell">
+  <header class="hero">
+    <div><p class="eyebrow">Three.js + GSAP</p><h1>Ocean Scene Creator</h1><p class="lede">Place tes objets dans la vue 3D, pose des keyframes sur la timeline et crée des liaisons temporaires entre objets.</p></div>
+    <div id="webgl-status" class="status-pill">Initialisation…</div>
+  </header>
 
-    <section class="viewer-card">
-      <div id="viewport" class="viewport" aria-label="Scène 3D de mer et bateaux">
-        <div class="scene-hud">
-          <strong id="scene-title">Ciel clair</strong>
-          <span id="scene-subtitle">Caméra libre</span>
-        </div>
+  <section class="workspace">
+    <div class="viewer-card">
+      <div id="viewport" class="viewport">
+        <div class="scene-hud"><strong>Édition 3D</strong><span>Glisse les gizmos · orbite avec la souris / le doigt</span></div>
       </div>
-
-      <div class="transport">
-        <button id="prev-scene" type="button">← Scène précédente</button>
-        <button id="next-scene" type="button" class="primary">Scène suivante →</button>
-        <button id="pause" type="button">Pause</button>
+      <div class="viewport-toolbar">
+        <button type="button" data-transform-mode="translate" class="active">Déplacer</button>
+        <button type="button" data-transform-mode="rotate">Tourner</button>
+        <button type="button" data-transform-mode="scale">Échelle</button>
+        <span class="spacer"></span>
+        <button id="add-keyframe" type="button" class="primary">◆ Keyframe</button>
+        <button id="delete-keyframe" type="button">Suppr. keyframe</button>
       </div>
-    </section>
+    </div>
 
-    <section class="panel-grid">
-      <section class="panel">
-        <div class="panel-heading">
-          <h2>Scènes</h2>
-          <span>GSAP interpole les paramètres</span>
-        </div>
-        <div class="row">
-          <button id="scene-calm" type="button">☀️ Calme</button>
-          <button id="scene-storm" type="button">⛈️ Tempête</button>
-          <button id="scene-cinematic" type="button">🎥 Cinématique</button>
-        </div>
-        <div class="telemetry">
-          <div><small>Vagues</small><b id="wave-value">0,2 m</b></div>
-          <div><small>Vent</small><b id="wind-value">3 m/s</b></div>
-          <div><small>Pluie</small><b id="rain-value">0 %</b></div>
-          <div><small>Bateaux</small><b id="boat-count">1</b></div>
-        </div>
+    <aside class="side-panel">
+      <section class="panel compact">
+        <div class="panel-heading"><h2>Objets</h2><span>Sélection</span></div>
+        <div id="editor-object-list" class="object-list"></div>
+        <div class="row"><button id="add-procedural" type="button">+ Bateau test</button><button id="remove-object" type="button" class="danger">Supprimer</button></div>
       </section>
 
-      <section class="panel">
-        <div class="panel-heading">
-          <h2>Caméra live</h2>
-          <span>OrbitControls + réglages numériques</span>
-        </div>
-        <label>Mode
-          <select id="camera-mode">
-            <option value="orbit">Orbit / libre</option>
-            <option value="follow">Suivre le bateau actif</option>
-          </select>
+      <section class="panel compact">
+        <div class="panel-heading"><h2>Importer un modèle</h2><span>GLB · GLTF · OBJ</span></div>
+        <label>Nom <input id="asset-name" type="text" placeholder="mon-bateau" /></label>
+        <label class="file-label">Fichiers
+          <input id="model-files" type="file" multiple accept=".glb,.gltf,.bin,.obj,.mtl,.png,.jpg,.jpeg,.webp" />
         </label>
-        <div class="slider-grid" id="camera-sliders"></div>
-        <div class="row">
-          <button id="apply-camera" type="button">Appliquer</button>
-          <button id="reset-camera" type="button">Réinitialiser</button>
-        </div>
+        <small id="selected-files" class="muted">Aucun fichier</small>
+        <label class="check"><input id="asset-floating" type="checkbox" checked /> Flotte sur l'océan</label>
+        <button id="load-model" type="button" class="primary">Charger</button>
+        <p class="hint">Un GLB conserve ses matériaux et textures embarquées. Pour un GLTF/OBJ, sélectionne en même temps ses textures, .bin et/ou .mtl.</p>
       </section>
 
-      <section class="panel">
-        <div class="panel-heading">
-          <h2>Bateaux</h2>
-          <span>Procédural, GLB/GLTF ou OBJ</span>
+      <section class="panel compact">
+        <div class="panel-heading"><h2>Transform</h2><span>Objet sélectionné</span></div>
+        <div id="transform-inspector" class="transform-grid">
+          <label>X <input data-transform="px" type="number" step=".1"></label><label>Y <input data-transform="py" type="number" step=".1"></label><label>Z <input data-transform="pz" type="number" step=".1"></label>
+          <label>RX° <input data-transform="rx" type="number" step="1"></label><label>RY° <input data-transform="ry" type="number" step="1"></label><label>RZ° <input data-transform="rz" type="number" step="1"></label>
+          <label>SX <input data-transform="sx" type="number" step=".05"></label><label>SY <input data-transform="sy" type="number" step=".05"></label><label>SZ <input data-transform="sz" type="number" step=".05"></label>
         </div>
-        <label>Bateau actif
-          <select id="boat-select"></select>
+        <label>Interpolation du prochain keyframe
+          <select id="key-ease"><option value="smooth">Smooth</option><option value="linear">Linear</option><option value="easeIn">Ease in</option><option value="easeOut">Ease out</option><option value="step">Step</option></select>
         </label>
-        <div class="row">
-          <button id="add-procedural" type="button">+ Bateau procédural</button>
-          <button id="load-demo-obj" type="button">Charger demo_boat.obj</button>
-        </div>
-        <label class="file-label">Charger un fichier local (.glb, .gltf, .obj)
-          <input id="model-file" type="file" accept=".glb,.gltf,.obj" />
-        </label>
-        <div class="slider-grid" id="boat-sliders"></div>
-        <div class="row">
-          <button id="apply-boat" type="button">Appliquer position</button>
-          <button id="remove-boat" type="button" class="danger">Supprimer</button>
-        </div>
-        <p class="hint">Pour un modèle avec textures, préfère <b>.glb</b>. Un OBJ fonctionne aussi ; un OBJ+MTL externe doit être chargé via l'API dans le code.</p>
       </section>
+    </aside>
+  </section>
 
-      <section class="panel">
-        <div class="panel-heading">
-          <h2>Météo live</h2>
-          <span>Modifie directement l'état courant</span>
-        </div>
-        <div class="slider-grid" id="weather-sliders"></div>
-      </section>
-    </section>
-
-    <section class="panel code-help">
-      <div class="panel-heading">
-        <h2>Points d'entrée faciles à modifier</h2>
-        <span>src/main.js</span>
+  <section class="timeline-card panel">
+    <div class="timeline-topbar">
+      <div class="row"><button id="timeline-play" type="button" class="primary">Lecture</button><button id="timeline-stop" type="button">Stop</button><b id="timeline-time">0.00 s</b></div>
+      <div class="row"><label>Durée <input id="timeline-duration" type="number" min=".1" step="1" value="12"></label><label class="check"><input id="timeline-loop" type="checkbox"> Boucle</label></div>
+      <div class="row"><button id="timeline-export" type="button">Exporter JSON</button><label class="file-button">Importer JSON<input id="timeline-import" type="file" accept="application/json,.json"></label></div>
+    </div>
+    <input id="timeline-scrub" class="scrub" type="range" min="0" max="12" step=".01" value="0" />
+    <div class="timeline-scroll">
+      <div class="timeline-stage">
+        <div id="timeline-ruler" class="timeline-ruler"></div>
+        <div id="timeline-rows"></div>
+        <div id="timeline-playhead" class="timeline-playhead"></div>
       </div>
-      <pre><code>// Ajouter un bateau GLB
-const boat = await world.addBoatFromUrl({
-  id: "rescue",
-  url: new URL("../assets/models/rescue.glb", import.meta.url).href,
-  position: [5, 0, -10],
-  scale: 0.8
-});
+    </div>
+  </section>
 
-// Déplacer la caméra
-world.cameraController.setPose({
-  position: [4, 2.5, 8],
-  target: [0, 0.8, -5]
-});
-
-// Ajouter une scène animée
-slides.addScene({
-  id: "heavy-storm",
-  weather: { storm: 1, rain: 1, wind: 24 },
-  camera: { position: [2, 1.6, 7], target: [0, 0.8, -5] }
-});</code></pre>
+  <section class="lower-grid">
+    <section class="panel">
+      <div class="panel-heading"><h2>Liaison temporaire</h2><span>Follow / detach automatique</span></div>
+      <p class="hint">L'objet sélectionné suit la position de la cible pendant l'intervalle. Un fondu aux deux extrémités évite un saut brutal au branchement/débranchement.</p>
+      <div class="binding-form">
+        <label>Cible <select id="binding-target"></select></label>
+        <label>Début <input id="binding-start" type="number" min="0" step=".1" value="2"></label>
+        <label>Fin <input id="binding-end" type="number" min="0" step=".1" value="5"></label>
+        <label>Fondu <input id="binding-blend" type="number" min="0" step=".05" value=".25"></label>
+      </div>
+      <div class="row checks"><label class="check"><input id="bind-x" type="checkbox" checked>X</label><label class="check"><input id="bind-y" type="checkbox" checked>Y</label><label class="check"><input id="bind-z" type="checkbox" checked>Z</label><label class="check"><input id="bind-rotation" type="checkbox">Rotation</label><button id="add-binding" type="button" class="primary">Créer la liaison</button></div>
+      <div id="binding-list" class="binding-list"></div>
     </section>
-  </main>
 
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
-      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/",
-      "gsap": "https://cdn.jsdelivr.net/npm/gsap@3.13.0/+esm"
-    }
-  }
-  </script>
-  <script type="module" src="./src/main.js"></script>
+    <section class="panel">
+      <div class="panel-heading"><h2>Météo</h2><span>Indépendante de la timeline objets</span></div>
+      <div class="row"><button id="weather-calm" type="button">☀️ Calme</button><button id="weather-storm" type="button">⛈️ Tempête</button></div>
+      <div class="weather-grid">
+        <label>Tempête <input data-weather="storm" type="range" min="0" max="1" step=".01" value="0"></label>
+        <label>Pluie <input data-weather="rain" type="range" min="0" max="1" step=".01" value="0"></label>
+        <label>Vent <input data-weather="wind" type="range" min="0" max="30" step="1" value="3"></label>
+        <label>Nuages <input data-weather="cloud" type="range" min="0" max="1" step=".01" value=".12"></label>
+      </div>
+      <div class="telemetry"><div><small>Vagues</small><b id="wave-value">0,2 m</b></div><div><small>Vent</small><b id="wind-value">3 m/s</b></div><div><small>Pluie</small><b id="rain-value">0 %</b></div></div>
+    </section>
+  </section>
+</main>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/","gsap":"https://cdn.jsdelivr.net/npm/gsap@3.13.0/+esm"}}</script>
+<script type="module" src="./src/main.js"></script>
 </body>
 </html>
