@@ -12,8 +12,8 @@ import { Weather } from './Weather.js';
 
 export class OceanWorld{
   constructor(viewport){
-    this.viewport=viewport;this.scene=new THREE.Scene();this.scene.fog=new THREE.FogExp2(0xbad8e3,.009);
-    this.camera=new THREE.PerspectiveCamera(46,16/9,.05,1000);this.camera.position.set(0,2.7,10.8);
+    this.viewport=viewport;this.scene=new THREE.Scene();this.scene.fog=new THREE.FogExp2(0xbad8e3,.000014);
+    this.camera=new THREE.PerspectiveCamera(46,16/9,.05,800000);this.camera.position.set(0,2.7,10.8);
     this.renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:'high-performance'});
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.5));this.renderer.outputColorSpace=THREE.SRGBColorSpace;
     this.renderer.toneMapping=THREE.ACESFilmicToneMapping;this.renderer.toneMappingExposure=1.12;this.renderer.shadowMap.enabled=true;this.renderer.shadowMap.type=THREE.PCFSoftShadowMap;viewport.prepend(this.renderer.domElement);
@@ -88,7 +88,7 @@ export class OceanWorld{
 
   #createSky(){
     this.skyUniforms={uStorm:{value:0},uSun:{value:new THREE.Vector3(.35,.48,.8).normalize()}};
-    this.sky=new THREE.Mesh(new THREE.SphereGeometry(600,36,20),new THREE.ShaderMaterial({depthWrite:false,side:THREE.BackSide,uniforms:this.skyUniforms,vertexShader:'varying vec3 p;void main(){p=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',fragmentShader:`uniform float uStorm;uniform vec3 uSun;varying vec3 p;void main(){vec3 d=normalize(p);float y=d.y*.5+.5;vec3 c=mix(mix(vec3(.80,.92,.98),vec3(.22,.60,.88),smoothstep(.18,.9,y)),mix(vec3(.38,.42,.46),vec3(.08,.11,.15),smoothstep(.18,.9,y)),uStorm);float disc=pow(max(dot(d,uSun),0.),900.);float glow=pow(max(dot(d,uSun),0.),42.);c+=vec3(1.,.78,.42)*(disc*2.6+glow*.18)*(1.-uStorm*.72);gl_FragColor=vec4(c,1.);}`}));this.sky.frustumCulled=false;this.scene.add(this.sky);
+    this.sky=new THREE.Mesh(new THREE.SphereGeometry(10000,36,20),new THREE.ShaderMaterial({depthWrite:false,side:THREE.BackSide,uniforms:this.skyUniforms,vertexShader:'varying vec3 p;void main(){p=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}',fragmentShader:`uniform float uStorm;uniform vec3 uSun;varying vec3 p;void main(){vec3 d=normalize(p);float y=d.y*.5+.5;vec3 c=mix(mix(vec3(.80,.92,.98),vec3(.22,.60,.88),smoothstep(.18,.9,y)),mix(vec3(.38,.42,.46),vec3(.08,.11,.15),smoothstep(.18,.9,y)),uStorm);float disc=pow(max(dot(d,uSun),0.),900.);float glow=pow(max(dot(d,uSun),0.),42.);c+=vec3(1.,.78,.42)*(disc*2.6+glow*.18)*(1.-uStorm*.72);gl_FragColor=vec4(c,1.);}`}));this.sky.frustumCulled=false;this.scene.add(this.sky);
   }
 
   #createClouds(){
@@ -98,16 +98,24 @@ export class OceanWorld{
     add(-20,9,-28,1.5);add(3,11,-35,1.1);add(21,8,-24,1.25);add(-4,15,-48,2.0);add(28,13,-52,1.8);
   }
 
-  #resize(){const r=this.viewport.getBoundingClientRect();if(!r.width||!r.height)return;this.renderer.setSize(r.width,r.height,false);this.cameraManager.resize(r.width,r.height);}
+  #resize(){
+    const r=this.viewport.getBoundingClientRect();if(!r.width||!r.height)return;
+    this.renderer.setSize(r.width,r.height,false);this.cameraManager.resize(r.width,r.height);
+  }
 
   #frame(now){
     const rawDt=Math.min(.033,(now-this.last)/1000||0);this.last=now;const dt=this.running?rawDt:0;if(this.running)this.time+=dt;
     if(this.running)this.timeline?.update(dt);
     this.cameraController.update(dt||.0001);
     const renderCamera=this.getRenderCamera();const s=this.weather.state;
+    const viewportHeight=Math.max(1,this.renderer.domElement.clientHeight||this.viewport.getBoundingClientRect().height||720);
 
-    this.scene.fog.color.setRGB(.73-s.storm*.34,.84-s.storm*.42,.88-s.storm*.46);this.scene.fog.density=.009+s.storm*.017;
-    this.ocean.update(this.time,s.storm,renderCamera.position,this.scene.fog);
+    // Much weaker fog than before: the sea now truly extends through a large
+    // world-space quadtree. Fog is atmospheric, not a trick to hide a 360 m patch.
+    this.scene.fog.color.setRGB(.73-s.storm*.34,.84-s.storm*.42,.88-s.storm*.46);
+    this.scene.fog.density=.000014+s.storm*.000018;
+    this.ocean.update(this.time,s.storm,renderCamera,this.scene.fog,viewportHeight);
+
     this.skyUniforms.uStorm.value=s.storm;this.sky.position.copy(renderCamera.position);
     this.hemi.intensity=1.8-s.storm*.65;this.sun.intensity=4.1-s.storm*3.15;this.scene.environmentIntensity=.55-s.storm*.2;
     this.cloudMaterial.color.setRGB(1-s.storm*.46,1-s.storm*.44,1-s.storm*.40);
