@@ -36,7 +36,6 @@ const bindingOffsets=new BindingOffsetController({editor,timeline});
 const bridge=new EditorViewBridge({world,timeline});
 bridge.registerProcedural('main-boat');
 
-// Keep SceneEditor's callbacks, then add synchronization/offset-space display.
 const editorTimelineChange=timeline.onChange;
 timeline.onChange=()=>{editorTimelineChange?.();bridge.sendTimeline();};
 const editorTimelineTime=timeline.onTime;
@@ -44,15 +43,12 @@ timeline.onTime=(t)=>{editorTimelineTime?.(t);bindingOffsets.updateInspector();}
 const editorObjectsChanged=world.onObjectsChanged;
 world.onObjectsChanged=()=>{editorObjectsChanged?.();bridge.scheduleFullSync();};
 
-// Live preview in the detached monitor, including unsaved gizmo movements.
 editor.transform.addEventListener('objectChange',()=>queueMicrotask(()=>bridge.schedulePose(editor.selectedId)));
 editor.transform.addEventListener('mouseUp',()=>queueMicrotask(()=>bridge.schedulePose(editor.selectedId)));
 document.addEventListener('change',(event)=>{
   if(event.target.closest?.('#transform-inspector,#camera-lens-panel'))queueMicrotask(()=>bridge.schedulePose(editor.selectedId));
 });
 
-// Playback belongs to the visualisation window: move the existing controls rather
-// than duplicating them so SceneEditor keeps the exact same button references.
 const toolbar=document.querySelector('.viewport-toolbar');
 const playBtn=document.querySelector('#timeline-play');
 const stopBtn=document.querySelector('#timeline-stop');
@@ -92,15 +88,31 @@ document.querySelector('#remove-object').addEventListener('click',()=>{
   if(!editor.selectedId)return;const id=editor.selectedId;timeline.removeObjectReferences(id);bridge.unregister(id);world.removeObject(id);
 });
 
-for(const input of document.querySelectorAll('[data-weather]'))input.addEventListener('input',()=>world.weather.state[input.dataset.weather]=Number(input.value));
+// Ocean controls are injected into the existing weather grid so the UI stays
+// backward compatible with old HTML snapshots while exposing the new engine.
+const weatherGrid=document.querySelector('.weather-grid');
+const oceanModeLabel=document.createElement('label');
+oceanModeLabel.innerHTML='Modèle de mer <select id="ocean-mode"><option value="standard">Standard · LOD léger</option><option value="geometric">Houle géométrique · maillage fin</option></select>';
+const waveHeightLabel=document.createElement('label');
+waveHeightLabel.innerHTML='Hauteur houle <input id="wave-height" data-weather="waveHeight" type="range" min="0" max="15" step=".1" value=".35">';
+weatherGrid.prepend(waveHeightLabel);weatherGrid.prepend(oceanModeLabel);
+const oceanMode=document.querySelector('#ocean-mode');oceanMode.value=world.ocean.mode;
+oceanMode.addEventListener('change',()=>{world.ocean.setMode(oceanMode.value);bridge.scheduleFullSync();});
+
+for(const input of document.querySelectorAll('[data-weather]')){
+  input.addEventListener('input',()=>{world.weather.state[input.dataset.weather]=Number(input.value);if(input.dataset.weather==='waveHeight')world.ocean.setWaveHeight(Number(input.value));});
+}
+
 world.onTick=(_dt,s)=>{
-  document.querySelector('#wave-value').textContent=(.2+s.storm*2.1).toFixed(1).replace('.',',')+' m';
+  document.querySelector('#wave-value').textContent=`${Number(s.waveHeight).toFixed(1).replace('.',',')} m`;
   document.querySelector('#wind-value').textContent=Math.round(s.wind)+' m/s';
   document.querySelector('#rain-value').textContent=Math.round(s.rain*100)+' %';
+  for(const input of document.querySelectorAll('[data-weather]'))if(document.activeElement!==input&&input.dataset.weather in s)input.value=s[input.dataset.weather];
   bindingOffsets.updateInspector();
 };
-document.querySelector('#weather-calm').addEventListener('click',()=>world.weather.transitionTo({storm:0,rain:0,wind:3,cloud:.12},2.5));
-document.querySelector('#weather-storm').addEventListener('click',()=>world.weather.transitionTo({storm:1,rain:1,wind:18,cloud:.95},4));
+
+document.querySelector('#weather-calm').addEventListener('click',()=>world.weather.transitionTo({storm:0,rain:0,wind:3,cloud:.12,waveHeight:.35},2.5));
+document.querySelector('#weather-storm').addEventListener('click',()=>world.weather.transitionTo({storm:1,rain:1,wind:18,cloud:.95,waveHeight:8},4));
 
 world.setViewMode('editor');
 window.sceneApp={world,timeline,editor,bridge,bindingOffsets};
