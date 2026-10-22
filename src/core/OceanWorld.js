@@ -38,10 +38,7 @@ export class OceanWorld{
     requestAnimationFrame(t=>this.#frame(t));
   }
 
-  setTimeline(timeline){
-    this.timeline=timeline;
-    timeline.onCameraCut=(id)=>{if(id)this.cameraManager.setActiveCamera(id);};
-  }
+  setTimeline(timeline){this.timeline=timeline;timeline.onCameraCut=(id)=>{if(id)this.cameraManager.setActiveCamera(id);};}
 
   setViewMode(mode){
     const normalized=mode==='cinematic'?'cinematic':'editor';
@@ -62,8 +59,7 @@ export class OceanWorld{
   async addBoatFromFile(file,options={}){return this.addModelFromFiles([file],{...options,floating:true,preferredName:file.name});}
 
   addCinematicCamera({id=`camera-${this.cameraManager.cameras.size+1}`,position=null,target=null,...lens}={}){
-    id=this.#uniqueId(id);
-    const p=position||this.camera.position.toArray();const t=target||this.cameraController.controls.target.toArray();
+    id=this.#uniqueId(id);const p=position||this.camera.position.toArray();const t=target||this.cameraController.controls.target.toArray();
     const actor=this.cameraManager.createCamera({id,position:p,target:t,...lens});this.objects.set(id,actor);if(!this.activeObjectId)this.activeObjectId=id;this.cameraManager.setActiveCamera(id);this.onObjectsChanged?.();return actor;
   }
 
@@ -101,10 +97,8 @@ export class OceanWorld{
   #applyOceanFollowConstraints(storm){
     if(!this.timeline)return;
     for(const follow of this.timeline.activeOceanFollowsAt(this.timeline.time)){
-      const actor=this.objects.get(follow.objectId);
-      if(!actor||actor.kind==='camera'||actor.kind==='boat')continue;
-      const object=actor.object;
-      object.getWorldPosition(this._seaTmpWorld);
+      const actor=this.objects.get(follow.objectId);if(!actor||actor.kind==='camera'||actor.kind==='boat')continue;
+      const object=actor.object;object.getWorldPosition(this._seaTmpWorld);
       const targetY=this.ocean.heightAt(this._seaTmpWorld.x,this._seaTmpWorld.z,this.time,storm)+follow.offset;
       this._seaTmpLocal.set(this._seaTmpWorld.x,targetY,this._seaTmpWorld.z);
       if(object.parent){object.parent.worldToLocal(this._seaTmpLocal);object.position.copy(this._seaTmpLocal);}else object.position.copy(this._seaTmpLocal);
@@ -118,19 +112,18 @@ export class OceanWorld{
     const renderCamera=this.getRenderCamera();const s=this.weather.state;
     const viewportHeight=Math.max(1,this.renderer.domElement.clientHeight||this.viewport.getBoundingClientRect().height||720);
 
+    this.ocean.setWaveHeight(s.waveHeight);
     this.scene.fog.color.setRGB(.73-s.storm*.34,.84-s.storm*.42,.88-s.storm*.46);this.scene.fog.density=.000014+s.storm*.000018;
     this.ocean.update(this.time,s.storm,renderCamera,this.scene.fog,viewportHeight);
 
     this.skyUniforms.uStorm.value=s.storm;this.sky.position.copy(renderCamera.position);
     this.hemi.intensity=1.8-s.storm*.65;this.sun.intensity=4.1-s.storm*3.15;this.scene.environmentIntensity=.55-s.storm*.2;
-
     this.clouds.update(dt,{time:this.time,cloud:s.cloud,storm:s.storm,wind:s.wind,camera:renderCamera,viewportHeight});
 
     for(const actor of this.objects.values())actor.update(this.time,s.storm,dt||.0001);
     this.#applyOceanFollowConstraints(s.storm);
     this.rain.update(dt,s.rain,s.wind,renderCamera);
     this.effects.update(this.timeline?.time??this.time,this.timeline?.effects??[]);
-    this.cameraManager.render();
-    this.onTick?.(dt,s);requestAnimationFrame(t=>this.#frame(t));
+    this.cameraManager.render();this.onTick?.(dt,s);requestAnimationFrame(t=>this.#frame(t));
   }
 }
