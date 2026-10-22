@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { OceanWorld } from './core/OceanWorld.js';
 import { SceneTimeline } from './core/SceneTimeline.js';
+import { EditorViewBridge } from './core/SceneSync.js';
 import { SceneEditor } from './editor/SceneEditor.js';
+import { BindingOffsetController } from './editor/BindingOffsetController.js';
 
 const viewport=document.querySelector('#viewport');
 const status=document.querySelector('#webgl-status');
@@ -30,6 +32,32 @@ timeline.captureKeyframe('camera-B',12,{interpolation:'smooth'});
 timeline.addCameraCut('camera-A',0);timeline.addCameraCut('camera-B',6);timeline.setTime(0,true);
 
 const editor=new SceneEditor({world,timeline,root:document});
+const bindingOffsets=new BindingOffsetController({editor,timeline});
+const bridge=new EditorViewBridge({world,timeline});
+bridge.registerProcedural('main-boat');
+
+// Keep SceneEditor's callbacks, then add synchronization/offset-space display.
+const editorTimelineChange=timeline.onChange;
+timeline.onChange=()=>{editorTimelineChange?.();bridge.sendTimeline();};
+const editorTimelineTime=timeline.onTime;
+timeline.onTime=(t)=>{editorTimelineTime?.(t);bindingOffsets.updateInspector();};
+const editorObjectsChanged=world.onObjectsChanged;
+world.onObjectsChanged=()=>{editorObjectsChanged?.();bridge.scheduleFullSync();};
+
+// Playback belongs to the visualisation window: move the existing controls rather
+// than duplicating them so SceneEditor keeps the exact same button references.
+const toolbar=document.querySelector('.viewport-toolbar');
+const playBtn=document.querySelector('#timeline-play');
+const stopBtn=document.querySelector('#timeline-stop');
+const timeLabel=document.querySelector('#timeline-time');
+const detachBtn=document.createElement('button');detachBtn.id='detach-view';detachBtn.type='button';detachBtn.textContent='↗ Détacher la vue';
+detachBtn.disabled=!('BroadcastChannel' in window);
+detachBtn.title=detachBtn.disabled?'BroadcastChannel indisponible dans ce navigateur':'Ouvrir une vue cinéma synchronisée dans un autre onglet';
+const playbackDivider=document.createElement('span');playbackDivider.className='toolbar-divider';
+const viewButtons=document.querySelector('#view-cinematic');
+viewButtons.after(playbackDivider,playBtn,stopBtn,timeLabel,detachBtn);
+detachBtn.addEventListener('click',()=>{try{bridge.openDetached();}catch(err){status.textContent=err.message;}});
+
 status.textContent='WebGL2 ✅ · Three.js ✅ · éditeur cinématique prêt';
 
 const floatingInput=document.querySelector('#asset-floating'),filesInput=document.querySelector('#model-files'),assetName=document.querySelector('#asset-name'),selectedFiles=document.querySelector('#selected-files');
@@ -37,22 +65,33 @@ filesInput.addEventListener('change',()=>{const files=[...filesInput.files];sele
 
 document.querySelector('#load-model').addEventListener('click',async()=>{
   const files=[...filesInput.files];if(!files.length){status.textContent='Sélectionne un GLB/GLTF/OBJ.';return;}status.textContent='Chargement du modèle…';
-  try{const actor=await world.addModelFromFiles(files,{id:assetName.value||undefined,position:[0,0,-6],scale:1,floating:floatingInput.checked});editor.select(actor.id);status.textContent=`${actor.id} chargé · textures conservées`;}
-  catch(err){console.error(err);status.textContent=`Erreur: ${err.message}`;}
+  try{
+    const floating=floatingInput.checked;
+    const preferred=files.find(f=>/\.(glb|gltf|obj)$/i.test(f.name))?.name||files[0].name;
+    const actor=await world.addModelFromFiles(files,{id:assetName.value||undefined,position:[0,0,-6],scale:1,floating,preferredName:preferred});
+    bridge.registerLocal(actor.id,files,{preferredName:preferred,floating});
+    editor.select(actor.id);status.textContent=`${actor.id} chargé · textures conservées`;
+  }catch(err){console.error(err);status.textContent=`Erreur: ${err.message}`;}
 });
 
-document.querySelector('#add-procedural').addEventListener('click',async()=>{const boat=await world.addProceduralBoat({id:`boat-${world.objects.size+1}`,position:[-3-world.objects.size,0,-7]});editor.select(boat.id);});
+document.querySelector('#add-procedural').addEventListener('click',async()=>{
+  const boat=await world.addProceduralBoat({id:`boat-${world.objects.size+1}`,position:[-3-world.objects.size,0,-7]});
+  bridge.registerProcedural(boat.id);editor.select(boat.id);
+});
 
-document.querySelector('#remove-object').addEventListener('click',()=>{if(!editor.selectedId)return;const id=editor.selectedId;timeline.removeObjectReferences(id);world.removeObject(id);});
+document.querySelector('#remove-object').addEventListener('click',()=>{
+  if(!editor.selectedId)return;const id=editor.selectedId;timeline.removeObjectReferences(id);bridge.unregister(id);world.removeObject(id);
+});
 
 for(const input of document.querySelectorAll('[data-weather]'))input.addEventListener('input',()=>world.weather.state[input.dataset.weather]=Number(input.value));
 world.onTick=(_dt,s)=>{
   document.querySelector('#wave-value').textContent=(.2+s.storm*2.1).toFixed(1).replace('.',',')+' m';
   document.querySelector('#wind-value').textContent=Math.round(s.wind)+' m/s';
   document.querySelector('#rain-value').textContent=Math.round(s.rain*100)+' %';
+  bindingOffsets.updateInspector();
 };
 document.querySelector('#weather-calm').addEventListener('click',()=>world.weather.transitionTo({storm:0,rain:0,wind:3,cloud:.12},2.5));
 document.querySelector('#weather-storm').addEventListener('click',()=>world.weather.transitionTo({storm:1,rain:1,wind:18,cloud:.95},4));
 
 world.setViewMode('editor');
-window.sceneApp={world,timeline,editor};
+window.sceneApp={world,timeline,editor,bridge,bindingOffsets};
