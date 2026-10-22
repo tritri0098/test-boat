@@ -1,10 +1,9 @@
 import * as THREE from 'three';
 
 /**
- * SceneEditor edits the real Object3D. When an object is constrained, that Object3D
- * already contains the parent's motion. This adapter makes the gizmo/Transform panel
- * feel unchanged by converting the displayed/final pose back to the object's base
- * pose (its local animation/offset), then asking SceneTimeline to reapply constraints.
+ * SceneEditor manipulates the rendered Object3D. For a constrained child that
+ * rendered pose already contains its parent's motion. This adapter presents and
+ * edits the child's own/base transform instead, so Transform stays an offset layer.
  */
 export class BindingOffsetController{
   constructor({editor,timeline}){
@@ -19,19 +18,48 @@ export class BindingOffsetController{
     }
   }
 
-  #usable(){
+  #isBound(){
     const id=this.editor.selectedId;
-    return Boolean(id&&!this.editor.selectedKeyframe&&this.timeline.hasActiveBinding(id,this.timeline.time));
+    return Boolean(id&&this.timeline.hasActiveBinding(id,this.timeline.time));
+  }
+
+  #editingKeyframe(){
+    return Boolean(this.editor.selectedKeyframe&&this.editor.selectedKeyframe.objectId===this.editor.selectedId&&this.editor.keyframeDraft);
   }
 
   #onObjectChange(){
-    if(!this.#usable())return;
-    this.pendingBase=this.timeline.snapshotEditableObject(this.editor.selectedId,this.timeline.time);
+    if(!this.#isBound())return;
+    const id=this.editor.selectedId;
+    const base=this.timeline.snapshotEditableObject(id,this.timeline.time);
+
+    if(this.#editingKeyframe()){
+      const old=this.editor.keyframeDraft;
+      this.editor.keyframeDraft={
+        ...old,
+        position:base.position,
+        quaternion:base.quaternion,
+        scale:base.scale,
+        camera:old.camera
+      };
+      return;
+    }
+
+    this.pendingBase=base;
     this.updateInspector();
   }
 
   #onMouseUp(){
-    if(!this.#usable()||!this.pendingBase)return;
+    if(!this.#isBound())return;
+
+    if(this.#editingKeyframe()){
+      // SceneEditor's mouseUp handler runs first and previews keyframeDraft. Since
+      // objectChange above has already converted the draft back to child/base space,
+      // previewing here once more simply guarantees one clean constraint application.
+      this.timeline.previewBaseSnapshot(this.editor.selectedId,this.editor.keyframeDraft,this.timeline.time);
+      return;
+    }
+
+    if(!this.pendingBase)return;
     const id=this.editor.selectedId,base=this.pendingBase;this.pendingBase=null;
     if(!(this.timeline.tracks.get(id)?.length))this.timeline.setManualBase(id,base,{evaluate:false});
     this.timeline.previewBaseSnapshot(id,base,this.timeline.time);
@@ -39,7 +67,7 @@ export class BindingOffsetController{
   }
 
   #afterInspectorChange(){
-    if(!this.#usable())return;
+    if(!this.#isBound()||this.#editingKeyframe())return;
     const id=this.editor.selectedId;
     const previous=this.timeline.snapshotEditableObject(id,this.timeline.time);
     const n=(key,fallback=0)=>{const v=Number(this.inspector.querySelector(`[data-transform="${key}"]`)?.value);return Number.isFinite(v)?v:fallback;};
@@ -61,7 +89,7 @@ export class BindingOffsetController{
   }
 
   updateInspector(){
-    if(!this.#usable()||!this.inspector)return;
+    if(!this.#isBound()||!this.inspector||this.#editingKeyframe())return;
     const base=this.pendingBase||this.timeline.snapshotEditableObject(this.editor.selectedId,this.timeline.time);
     const e=new THREE.Euler().setFromQuaternion(new THREE.Quaternion().fromArray(base.quaternion),'XYZ');
     const values={
