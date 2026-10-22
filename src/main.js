@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { OceanWorld } from './core/OceanWorld.js';
 import { SceneTimeline } from './core/SceneTimeline.js';
-import { EditorViewBridge } from './core/SceneSync.js';
 import { SceneEditor } from './editor/SceneEditor.js';
 import { BindingOffsetController } from './editor/BindingOffsetController.js';
 
@@ -33,35 +32,22 @@ timeline.addCameraCut('camera-A',0);timeline.addCameraCut('camera-B',6);timeline
 
 const editor=new SceneEditor({world,timeline,root:document});
 const bindingOffsets=new BindingOffsetController({editor,timeline});
-const bridge=new EditorViewBridge({world,timeline});
-bridge.registerProcedural('main-boat');
 
-const editorTimelineChange=timeline.onChange;
-timeline.onChange=()=>{editorTimelineChange?.();bridge.sendTimeline();};
+// Keep the transform inspector expressed in the child's local/offset space when
+// a binding is active, without introducing any cross-window synchronization.
 const editorTimelineTime=timeline.onTime;
 timeline.onTime=(t)=>{editorTimelineTime?.(t);bindingOffsets.updateInspector();};
-const editorObjectsChanged=world.onObjectsChanged;
-world.onObjectsChanged=()=>{editorObjectsChanged?.();bridge.scheduleFullSync();};
 
-editor.transform.addEventListener('objectChange',()=>queueMicrotask(()=>bridge.schedulePose(editor.selectedId)));
-editor.transform.addEventListener('mouseUp',()=>queueMicrotask(()=>bridge.schedulePose(editor.selectedId)));
-document.addEventListener('change',(event)=>{
-  if(event.target.closest?.('#transform-inspector,#camera-lens-panel'))queueMicrotask(()=>bridge.schedulePose(editor.selectedId));
-});
-
-const toolbar=document.querySelector('.viewport-toolbar');
+// Playback controls belong next to the viewport. Move the existing elements
+// rather than duplicating them, so SceneEditor keeps the same references.
 const playBtn=document.querySelector('#timeline-play');
 const stopBtn=document.querySelector('#timeline-stop');
 const timeLabel=document.querySelector('#timeline-time');
 const oldPlaybackRow=playBtn.parentElement;
-const detachBtn=document.createElement('button');detachBtn.id='detach-view';detachBtn.type='button';detachBtn.textContent='↗ Détacher la vue';
-detachBtn.disabled=!('BroadcastChannel' in window);
-detachBtn.title=detachBtn.disabled?'BroadcastChannel indisponible dans ce navigateur':'Ouvrir une vue cinéma synchronisée dans un autre onglet';
 const playbackDivider=document.createElement('span');playbackDivider.className='toolbar-divider';
 const viewButtons=document.querySelector('#view-cinematic');
-viewButtons.after(playbackDivider,playBtn,stopBtn,timeLabel,detachBtn);
+viewButtons.after(playbackDivider,playBtn,stopBtn,timeLabel);
 if(oldPlaybackRow&&!oldPlaybackRow.children.length)oldPlaybackRow.remove();
-detachBtn.addEventListener('click',()=>{try{bridge.openDetached();}catch(err){status.textContent=err.message;}});
 
 status.textContent='WebGL2 ✅ · Three.js ✅ · éditeur cinématique prêt';
 
@@ -74,22 +60,19 @@ document.querySelector('#load-model').addEventListener('click',async()=>{
     const floating=floatingInput.checked;
     const preferred=files.find(f=>/\.(glb|gltf|obj)$/i.test(f.name))?.name||files[0].name;
     const actor=await world.addModelFromFiles(files,{id:assetName.value||undefined,position:[0,0,-6],scale:1,floating,preferredName:preferred});
-    bridge.registerLocal(actor.id,files,{preferredName:preferred,floating});
     editor.select(actor.id);status.textContent=`${actor.id} chargé · textures conservées`;
   }catch(err){console.error(err);status.textContent=`Erreur: ${err.message}`;}
 });
 
 document.querySelector('#add-procedural').addEventListener('click',async()=>{
   const boat=await world.addProceduralBoat({id:`boat-${world.objects.size+1}`,position:[-3-world.objects.size,0,-7]});
-  bridge.registerProcedural(boat.id);editor.select(boat.id);
+  editor.select(boat.id);
 });
 
 document.querySelector('#remove-object').addEventListener('click',()=>{
-  if(!editor.selectedId)return;const id=editor.selectedId;timeline.removeObjectReferences(id);bridge.unregister(id);world.removeObject(id);
+  if(!editor.selectedId)return;const id=editor.selectedId;timeline.removeObjectReferences(id);world.removeObject(id);
 });
 
-// Ocean controls are injected into the existing weather grid so the UI stays
-// backward compatible with old HTML snapshots while exposing the new engine.
 const weatherGrid=document.querySelector('.weather-grid');
 const oceanModeLabel=document.createElement('label');
 oceanModeLabel.innerHTML='Modèle de mer <select id="ocean-mode"><option value="standard">Standard · LOD léger</option><option value="geometric">Houle géométrique · maillage fin</option></select>';
@@ -97,7 +80,7 @@ const waveHeightLabel=document.createElement('label');
 waveHeightLabel.innerHTML='Hauteur houle <input id="wave-height" data-weather="waveHeight" type="range" min="0" max="15" step=".1" value=".35">';
 weatherGrid.prepend(waveHeightLabel);weatherGrid.prepend(oceanModeLabel);
 const oceanMode=document.querySelector('#ocean-mode');oceanMode.value=world.ocean.mode;
-oceanMode.addEventListener('change',()=>{world.ocean.setMode(oceanMode.value);bridge.scheduleFullSync();});
+oceanMode.addEventListener('change',()=>world.ocean.setMode(oceanMode.value));
 
 for(const input of document.querySelectorAll('[data-weather]')){
   input.addEventListener('input',()=>{world.weather.state[input.dataset.weather]=Number(input.value);if(input.dataset.weather==='waveHeight')world.ocean.setWaveHeight(Number(input.value));});
@@ -115,4 +98,4 @@ document.querySelector('#weather-calm').addEventListener('click',()=>world.weath
 document.querySelector('#weather-storm').addEventListener('click',()=>world.weather.transitionTo({storm:1,rain:1,wind:18,cloud:.95,waveHeight:8},4));
 
 world.setViewMode('editor');
-window.sceneApp={world,timeline,editor,bridge,bindingOffsets};
+window.sceneApp={world,timeline,editor,bindingOffsets};
