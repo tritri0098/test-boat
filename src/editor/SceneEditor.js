@@ -145,8 +145,6 @@ export class SceneEditor{
     if(actor.kind==='boat'){alert("Ce bateau utilise déjà la flottabilité permanente. Le suivi keyframé de la mer est destiné aux objets chargés sans l'option « Flotte sur l’océan ».");return;}
     const offset=Number(this.seaFollowOffset?.value)||0;
     this.timeline.addOceanFollowKey(this.selectedId,this.timeline.time,{enabled,offset});
-    // Important when disabling at the current playhead: restore the object's base
-    // keyframed transform immediately, before the per-frame sea constraint runs.
     this.timeline.evaluate(this.timeline.time);
     this.renderTimeline();this.#syncSeaFollowControls();
   }
@@ -194,14 +192,20 @@ export class SceneEditor{
   }
 
   #renderCameraCutRow(duration){
-    const row=document.createElement('div');row.className='timeline-row special-row',label=document.createElement('div');label.className='track-label static-label';label.textContent='🎬 CAM CUT';row.append(label);
+    const row=document.createElement('div');
+    row.className='timeline-row special-row';
+    const label=document.createElement('div');
+    label.className='track-label static-label';label.textContent='🎬 CAM CUT';row.append(label);
     const lane=document.createElement('div');lane.className='track-lane camera-cut-lane';row.append(lane);const cuts=[...this.timeline.cameraCuts].sort((a,b)=>a.time-b.time);
     for(let i=0;i<cuts.length;i++){const cut=cuts[i],next=cuts[i+1]?.time??duration,bar=document.createElement('button');bar.type='button';bar.className='camera-cut-bar';bar.style.left=`${cut.time/duration*100}%`;bar.style.width=`${Math.max(.7,(next-cut.time)/duration*100)}%`;bar.textContent=cut.cameraId;bar.title=`${cut.cameraId} à ${cut.time.toFixed(2)} s`;bar.addEventListener('click',(e)=>{e.stopPropagation();this.clearKeyframeSelection(false);this.select(cut.cameraId);this.timeline.setTime(cut.time,true);});lane.append(bar);}
     lane.addEventListener('pointerdown',(e)=>{if(e.target!==lane)return;this.clearKeyframeSelection(false);const r=lane.getBoundingClientRect();this.timeline.setTime((e.clientX-r.left)/r.width*duration,true);this.renderTimeline();});this.timelineRows.append(row);
   }
 
   #renderEffectRow(duration){
-    const row=document.createElement('div');row.className='timeline-row special-row',label=document.createElement('div');label.className='track-label static-label';label.textContent='✨ FX';row.append(label);
+    const row=document.createElement('div');
+    row.className='timeline-row special-row';
+    const label=document.createElement('div');
+    label.className='track-label static-label';label.textContent='✨ FX';row.append(label);
     const lane=document.createElement('div');lane.className='track-lane fx-lane';row.append(lane);
     for(const fx of this.timeline.effects){const bar=document.createElement('button');bar.type='button';bar.className=`effect-bar ${fx.type==='rocketFlame'?'flame':''}`;bar.style.left=`${fx.start/duration*100}%`;bar.style.width=`${Math.max(.8,(fx.end-fx.start)/duration*100)}%`;bar.textContent=fx.type==='rocketFlame'?'🔥 moteur':'💥 explosion';bar.title=`${fx.start.toFixed(2)}–${fx.end.toFixed(2)} s${fx.targetId?` · ${fx.targetId}`:''}`;bar.addEventListener('click',(e)=>{e.stopPropagation();this.clearKeyframeSelection(false);this.timeline.setTime(fx.start,true);});lane.append(bar);}
     lane.addEventListener('pointerdown',(e)=>{if(e.target!==lane)return;this.clearKeyframeSelection(false);const r=lane.getBoundingClientRect();this.timeline.setTime((e.clientX-r.left)/r.width*duration,true);this.renderTimeline();});this.timelineRows.append(row);
