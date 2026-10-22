@@ -2,7 +2,7 @@ import { gsap } from 'gsap';
 
 export class Weather {
   constructor() {
-    this.state = { storm:0, rain:0, wind:3, cloud:0.12 };
+    this.state = { storm:0, rain:0, wind:3, cloud:0.12, waveHeight:0.35 };
     this.tween = null;
   }
 
