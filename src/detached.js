@@ -49,6 +49,7 @@ channel.addEventListener('message',(event)=>{
   const msg=event.data||{};
   if(msg.type==='full-state'){rebuild(msg).catch(err=>{console.error(err);status.textContent=`Erreur: ${err.message}`;});return;}
   if(!initialized)return;
+
   if(msg.type==='timeline'){
     const current=Number(msg.time)||0;
     timeline.load(msg.timeline);
@@ -56,6 +57,14 @@ channel.addEventListener('message',(event)=>{
     msg.playing?timeline.play():timeline.pause();
     return;
   }
+
+  if(msg.type==='pose'){
+    if(!world.getEditableObject(msg.id))return;
+    if(msg.persist)timeline.setManualBase(msg.id,msg.base,{evaluate:false});
+    timeline.previewBaseSnapshot(msg.id,msg.base,Number(msg.time)||timeline.time);
+    return;
+  }
+
   if(msg.type==='clock'){
     Object.assign(world.weather.state,msg.weather||{});
     if(msg.activeCamera)world.cameraManager.setActiveCamera(msg.activeCamera);
