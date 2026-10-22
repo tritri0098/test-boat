@@ -10,7 +10,7 @@ export class EditorViewBridge{
   constructor({world,timeline}){
     this.world=world;this.timeline=timeline;this.assets=new Map();
     this.channel='BroadcastChannel' in window?new BroadcastChannel(SCENE_CHANNEL):null;
-    this.detachedWindow=null;this.fullSyncTimer=null;
+    this.detachedWindow=null;this.fullSyncTimer=null;this.poseTimer=null;this.pendingPoseId=null;
     this.channel?.addEventListener('message',(event)=>{
       if(event.data?.type==='request-full-state')this.sendFullState();
     });
@@ -37,6 +37,25 @@ export class EditorViewBridge{
   sendTimeline(){
     if(!this.channel)return;
     this.channel.postMessage({type:'timeline',timeline:this.timeline.toJSON(),time:this.timeline.time,playing:this.timeline.playing});
+  }
+
+  schedulePose(id){
+    if(!this.channel||!id)return;
+    this.pendingPoseId=id;
+    if(this.poseTimer)return;
+    this.poseTimer=setTimeout(()=>{
+      const next=this.pendingPoseId;this.pendingPoseId=null;this.poseTimer=null;
+      this.sendPose(next);
+    },16);
+  }
+
+  sendPose(id){
+    if(!this.channel||!id||!this.world.getEditableObject(id))return;
+    const base=this.timeline.snapshotEditableObject(id,this.timeline.time);
+    this.channel.postMessage({
+      type:'pose',id,time:this.timeline.time,base,
+      persist:!(this.timeline.tracks.get(id)?.length)
+    });
   }
 
   sendClock(){
@@ -66,11 +85,10 @@ export class EditorViewBridge{
       }
     }
     this.channel.postMessage({
-      type:'full-state',
-      objects,timeline:this.timeline.toJSON(),time:this.timeline.time,playing:this.timeline.playing,
+      type:'full-state',objects,timeline:this.timeline.toJSON(),time:this.timeline.time,playing:this.timeline.playing,
       activeCamera:this.world.cameraManager.activeId,weather:{...this.world.weather.state}
     });
   }
 
-  dispose(){clearInterval(this.clockTimer);clearTimeout(this.fullSyncTimer);this.channel?.close();}
+  dispose(){clearInterval(this.clockTimer);clearTimeout(this.fullSyncTimer);clearTimeout(this.poseTimer);this.channel?.close();}
 }
