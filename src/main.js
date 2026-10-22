@@ -44,18 +44,27 @@ timeline.onTime=(t)=>{editorTimelineTime?.(t);bindingOffsets.updateInspector();}
 const editorObjectsChanged=world.onObjectsChanged;
 world.onObjectsChanged=()=>{editorObjectsChanged?.();bridge.scheduleFullSync();};
 
+// Live preview in the detached monitor, including unsaved gizmo movements.
+editor.transform.addEventListener('objectChange',()=>queueMicrotask(()=>bridge.schedulePose(editor.selectedId)));
+editor.transform.addEventListener('mouseUp',()=>queueMicrotask(()=>bridge.schedulePose(editor.selectedId)));
+document.addEventListener('change',(event)=>{
+  if(event.target.closest?.('#transform-inspector,#camera-lens-panel'))queueMicrotask(()=>bridge.schedulePose(editor.selectedId));
+});
+
 // Playback belongs to the visualisation window: move the existing controls rather
 // than duplicating them so SceneEditor keeps the exact same button references.
 const toolbar=document.querySelector('.viewport-toolbar');
 const playBtn=document.querySelector('#timeline-play');
 const stopBtn=document.querySelector('#timeline-stop');
 const timeLabel=document.querySelector('#timeline-time');
+const oldPlaybackRow=playBtn.parentElement;
 const detachBtn=document.createElement('button');detachBtn.id='detach-view';detachBtn.type='button';detachBtn.textContent='↗ Détacher la vue';
 detachBtn.disabled=!('BroadcastChannel' in window);
 detachBtn.title=detachBtn.disabled?'BroadcastChannel indisponible dans ce navigateur':'Ouvrir une vue cinéma synchronisée dans un autre onglet';
 const playbackDivider=document.createElement('span');playbackDivider.className='toolbar-divider';
 const viewButtons=document.querySelector('#view-cinematic');
 viewButtons.after(playbackDivider,playBtn,stopBtn,timeLabel,detachBtn);
+if(oldPlaybackRow&&!oldPlaybackRow.children.length)oldPlaybackRow.remove();
 detachBtn.addEventListener('click',()=>{try{bridge.openDetached();}catch(err){status.textContent=err.message;}});
 
 status.textContent='WebGL2 ✅ · Three.js ✅ · éditeur cinématique prêt';
