@@ -80,7 +80,7 @@ maxLeaves: 6500,
 earthRadius: 6371000
 ```
 
-La surface utilise maintenant une sphère terrestre de rayon **6 371 km** tangente au niveau `Y = 0` à l'origine :
+La surface utilise une sphère terrestre de rayon **6 371 km** tangente au niveau `Y = 0` à l'origine :
 
 ```text
 y(x,z) = sqrt(R² - x² - z²) - R
@@ -93,6 +93,26 @@ Le maillage LOD couvre actuellement un secteur d'environ **2 097 km de côté**,
 Des skirts sont ajoutés aux tuiles pour masquer les fissures entre deux niveaux de LOD. Les petites longueurs d'onde sont également atténuées sur les tuiles très grossières afin d'éviter d'animer des détails impossibles à représenter géométriquement.
 
 > À des distances planétaires extrêmes, il faudra passer à un système de coordonnées flottantes / floating origin. La version actuelle vise les scènes cinématiques allant de quelques mètres à plusieurs centaines de kilomètres autour de l'origine.
+
+## Nuages monde et échelle atmosphérique
+
+Les nuages ne sont plus attachés à la caméra. `CloudField` génère un champ déterministe de cellules météo en **coordonnées monde** : la caméra ne fait que déclencher le chargement/rechargement des cellules voisines, sans déplacer artificiellement les nuages avec elle.
+
+Les dimensions et altitudes utilisent maintenant l'échelle de la scène en mètres :
+
+- cumulus bas : base environ **900 à 1 900 m**, diamètre typique de plusieurs centaines de mètres à ~2,5 km ;
+- couche moyenne : environ **3 000 à 5 200 m**, nuages plus étendus ;
+- cellules convectives / orageuses : base vers **650 à 1 250 m**, développement vertical pouvant dépasser plusieurs kilomètres.
+
+Chaque nuage est positionné au-dessus de la **surface terrestre courbe** : son altitude est ajoutée à `Ocean.curvatureHeightAt(x,z)`, donc une formation lointaine suit également la géométrie de la planète au lieu de rester sur un plan horizontal infini.
+
+Le vent déplace la masse d'air en mètres par seconde selon une direction monde fixe. Le champ nuageux ne se recentre pas sur la caméra et ne "glisse" donc plus avec les mouvements de cadrage ou les changements de focale.
+
+Le rendu utilise des puffs instanciés à LOD écran : un nuage proche reçoit davantage de sous-volumes, tandis qu'un nuage très lointain est simplifié. Un shader procédural adoucit les silhouettes, casse l'aspect sphérique, éclaire les sommets, assombrit les bases et adapte la teinte aux conditions orageuses.
+
+Le curseur **Nuages** contrôle la couverture générale et le paramètre **Tempête** augmente en plus la densité des cellules convectives.
+
+> Ce système reste un rendu procédural léger, pas un vrai solveur volumétrique ray-marché. L'objectif est d'obtenir une géométrie, une échelle, une altitude et un mouvement cohérents sans exploser le coût GPU.
 
 ## Pluie
 
@@ -163,6 +183,7 @@ src/
 │   ├── Boat.js
 │   ├── CameraController.js
 │   ├── CameraManager.js
+│   ├── CloudField.js
 │   ├── EffectsManager.js
 │   ├── ModelLoader.js
 │   ├── Ocean.js
