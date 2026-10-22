@@ -10,47 +10,73 @@ python3 server.py
 
 Puis ouvre `http://127.0.0.1:8000/`.
 
-Le serveur Python n'effectue aucun appel réseau sortant. Le navigateur ne contacte que `cdn.jsdelivr.net` pour les modules JavaScript Three.js/GSAP réellement utilisés. Les modèles, textures et timelines restent locaux ou servis par le même serveur.
+Le serveur Python n'effectue aucun appel réseau sortant. Le navigateur ne contacte que `cdn.jsdelivr.net` pour les modules Three.js/GSAP. Les modèles, textures et timelines restent locaux ou servis par le même serveur.
 
-## Mode éditeur / mode cinématique
+## Éditeur, cinéma et vue détachée
 
-Deux vues sont disponibles :
+Deux vues existent dans l'éditeur :
 
-- **Éditeur** : caméra OrbitControls, gizmos de translation/rotation/échelle et sélection des objets ;
-- **Vue caméra** : rendu depuis la caméra cinématique active choisie par les coupes de la timeline.
+- **Éditeur** : OrbitControls, sélection et gizmos ;
+- **Vue caméra** : rendu depuis la caméra cinématique active de la piste `CAM CUT`.
 
-Chaque caméra possède ses propres keyframes de position, rotation, focale, zoom, distance de mise au point, aperture DOF, blur maximal et activation de la profondeur de champ. La piste **CAM CUT** choisit la caméra utilisée à chaque instant.
+Les boutons **Lecture** et **Stop** sont déplacés dans la barre de la fenêtre de visualisation.
 
-La profondeur de champ utilise `BokehPass` de Three.js et n'est calculée que dans la vue cinématique lorsqu'elle est activée.
+Le bouton **↗ Détacher la vue** ouvre `viewer.html` dans un autre onglet et synchronise la scène avec l'éditeur via `BroadcastChannel`. Le deuxième onglet reste en vue cinématique et reçoit :
+
+- playhead et lecture/pause ;
+- changements de timeline et de caméra active ;
+- météo ;
+- ajouts/suppressions d'objets ;
+- modèles locaux sélectionnés par l'utilisateur, textures comprises.
+
+Les deux onglets doivent être ouverts sur **la même origine HTTP**. Les fichiers locaux importés sont clonés par le navigateur vers le second onglet ; un très gros GLB peut donc consommer davantage de mémoire lorsqu'une vue détachée est ouverte.
 
 ## Keyframes éditables
 
-Chaque keyframe possède un identifiant stable. Un clic sur le losange sélectionne **cette keyframe précise et uniquement celle de sa piste**.
+Chaque keyframe possède un identifiant stable. Un clic sur son losange sélectionne uniquement cette keyframe. Position, rotation, échelle et, pour les caméras, paramètres optiques peuvent être modifiés puis enregistrés en place.
 
-Tu peux ensuite modifier l'objet avec le gizmo ou l'inspecteur puis cliquer sur **Enregistrer cette keyframe**. Déplacer le playhead avant l'enregistrement déplace également la keyframe dans le temps. Une collision avec une autre keyframe du même objet est refusée au lieu d'écraser silencieusement cette dernière.
+Déplacer le playhead avant l'enregistrement déplace aussi la keyframe dans le temps. Une collision avec une autre keyframe du même objet est refusée.
+
+## Liaisons objet → objet
+
+Une liaison est désormais calculée comme une **contrainte de mouvement du parent** et non comme une copie de sa position absolue.
+
+Au début de la liaison, la pose monde du parent est mémorisée. Pendant la liaison :
+
+```text
+deltaParent(t) = poseParent(t) - poseParent(début)
+poseFinaleEnfant(t) = posePropreEnfant(t) + deltaParent(t)
+```
+
+Pour la translation, cela signifie que deux objets séparés par un offset constant suivent la **même trajectoire**, simplement translatée dans l'espace.
+
+Les cases X/Y/Z choisissent les composantes du déplacement du parent à appliquer. Si **Rotation** est cochée, l'enfant reçoit également le **delta angulaire du parent depuis le début de la liaison**. Son orientation propre reste un offset éditable par-dessus cette rotation.
+
+### Transform de l'enfant lié
+
+Le panneau `Transform` et les gizmos continuent à représenter la transformation propre de l'enfant, comme si la liaison n'existait pas :
+
+```text
+transformation finale = transformation propre / keyframes enfant
+                     + transformation imposée par la liaison
+```
+
+Ainsi, déplacer ou tourner un objet lié ne casse pas la liaison : cela change seulement son offset par rapport à la trajectoire/rotation héritée. Lorsqu'une keyframe d'un objet lié est éditée, la valeur enregistrée reste également dans cet espace d'offset et ne contient pas deux fois le mouvement du parent.
+
+Les chaînes de contraintes sont résolues cible avant enfant. Les liaisons restent prioritaires sur les keyframes dans le rendu final.
 
 ## Priorité des contraintes
 
-L'ordre d'évaluation est :
-
 ```text
-1. keyframes / interpolation
+1. keyframes / interpolation de base
 2. liaisons objet → objet
-3. contrainte verticale objet → surface de la mer
+3. suivi vertical de la surface de la mer
 4. sélection de la caméra de rendu
 ```
 
-Les contraintes ont donc priorité sur les valeurs interpolées des keyframes. Une liaison objet → objet peut piloter X/Z/rotation, puis le suivi de mer peut remplacer uniquement la hauteur Y avec la surface réelle calculée au X/Z résultant.
-
 ## Suivi vertical de la mer par keyframes
 
-Un objet chargé **sans** l'option `Flotte sur l'océan` peut recevoir une contrainte verticale animable :
-
-1. place le playhead au moment voulu ;
-2. sélectionne l'objet ;
-3. règle éventuellement un offset vertical ;
-4. clique sur **Activer au playhead** ;
-5. plus loin dans la timeline, clique sur **Désactiver au playhead**.
+Un objet chargé sans flottabilité peut activer puis désactiver une contrainte de hauteur via des événements ON/OFF dans la timeline.
 
 Pendant la période active :
 
@@ -58,17 +84,13 @@ Pendant la période active :
 Y objet = hauteur courbe de la mer(X,Z) + vague(X,Z,t) + offset
 ```
 
-Le suivi est recalculé **à chaque frame de rendu**, donc l'objet suit réellement les vagues même si le playhead est arrêté. Quand la contrainte est désactivée, la transformation provenant des keyframes reprend la main.
-
-Les bateaux créés avec la flottabilité permanente n'utilisent pas cette contrainte supplémentaire, afin d'éviter une double application de la hauteur d'eau.
+X/Z continuent donc à provenir des keyframes et/ou d'une liaison objet → objet. Le suivi est recalculé à chaque frame de rendu afin de suivre réellement les vagues.
 
 ## Océan monde, LOD et courbure terrestre
 
-La mer n'est plus un plan collé à la caméra. C'est une surface en coordonnées monde découpée par un **quadtree LOD**.
+La mer est une surface en coordonnées monde découpée par un quadtree LOD. Le niveau de détail dépend de la projection réelle de la caméra : distance, hauteur, viewport, focale et zoom.
 
-Le niveau de détail dépend de la projection réelle de la caméra : distance, hauteur, taille du viewport, champ de vision effectif, focale et zoom. Un téléobjectif force donc davantage de subdivisions sur une zone lointaine qui occupe beaucoup de pixels, tandis qu'un grand-angle permet de réduire le détail là où il devient invisible.
-
-Paramètres principaux dans `Ocean.js` :
+Paramètres principaux de `Ocean.js` :
 
 ```js
 rootSize: 2097152,
@@ -80,103 +102,54 @@ maxLeaves: 6500,
 earthRadius: 6371000
 ```
 
-La surface utilise une sphère terrestre de rayon **6 371 km** tangente au niveau `Y = 0` à l'origine :
+La surface moyenne suit une Terre sphérique de rayon 6 371 km :
 
 ```text
 y(x,z) = sqrt(R² - x² - z²) - R
 ```
 
-Les vagues sont ensuite ajoutées à cette altitude. Cela produit un véritable horizon géométrique : avec une caméra basse, la mer disparaît naturellement derrière la courbure au lieu d'être simplement masquée par un brouillard ou limitée par un plan.
+Les vagues sont ajoutées par-dessus. Cela donne un véritable horizon géométrique et non un plan qui suit la caméra.
 
-Le maillage LOD couvre actuellement un secteur d'environ **2 097 km de côté**, mais seules les feuilles visibles du quadtree sont envoyées au GPU. Le brouillard reste très léger et sert à l'atmosphère, pas à cacher la fin de la géométrie.
+## Nuages monde
 
-Des skirts sont ajoutés aux tuiles pour masquer les fissures entre deux niveaux de LOD. Les petites longueurs d'onde sont également atténuées sur les tuiles très grossières afin d'éviter d'animer des détails impossibles à représenter géométriquement.
+`CloudField` génère des cellules météo en coordonnées monde avec échelle atmosphérique : cumulus bas, couche moyenne et cellules convectives. Leur altitude est mesurée au-dessus de la surface terrestre courbe. Le vent déplace la masse d'air en mètres par seconde ; la caméra ne déplace plus artificiellement les nuages.
 
-> À des distances planétaires extrêmes, il faudra passer à un système de coordonnées flottantes / floating origin. La version actuelle vise les scènes cinématiques allant de quelques mètres à plusieurs centaines de kilomètres autour de l'origine.
-
-## Nuages monde et échelle atmosphérique
-
-Les nuages ne sont plus attachés à la caméra. `CloudField` génère un champ déterministe de cellules météo en **coordonnées monde** : la caméra ne fait que déclencher le chargement/rechargement des cellules voisines, sans déplacer artificiellement les nuages avec elle.
-
-Les dimensions et altitudes utilisent maintenant l'échelle de la scène en mètres :
-
-- cumulus bas : base environ **900 à 1 900 m**, diamètre typique de plusieurs centaines de mètres à ~2,5 km ;
-- couche moyenne : environ **3 000 à 5 200 m**, nuages plus étendus ;
-- cellules convectives / orageuses : base vers **650 à 1 250 m**, développement vertical pouvant dépasser plusieurs kilomètres.
-
-Chaque nuage est positionné au-dessus de la **surface terrestre courbe** : son altitude est ajoutée à `Ocean.curvatureHeightAt(x,z)`, donc une formation lointaine suit également la géométrie de la planète au lieu de rester sur un plan horizontal infini.
-
-Le vent déplace la masse d'air en mètres par seconde selon une direction monde fixe. Le champ nuageux ne se recentre pas sur la caméra et ne "glisse" donc plus avec les mouvements de cadrage ou les changements de focale.
-
-Le rendu utilise des puffs instanciés à LOD écran : un nuage proche reçoit davantage de sous-volumes, tandis qu'un nuage très lointain est simplifié. Un shader procédural adoucit les silhouettes, casse l'aspect sphérique, éclaire les sommets, assombrit les bases et adapte la teinte aux conditions orageuses.
-
-Le curseur **Nuages** contrôle la couverture générale et le paramètre **Tempête** augmente en plus la densité des cellules convectives.
-
-> Ce système reste un rendu procédural léger, pas un vrai solveur volumétrique ray-marché. L'objectif est d'obtenir une géométrie, une échelle, une altitude et un mouvement cohérents sans exploser le coût GPU.
+Le rendu utilise des puffs instanciés avec LOD écran et shader procédural. Ce n'est pas encore un ray-marching volumétrique complet, mais les proportions, l'altitude et le mouvement sont cohérents avec la scène.
 
 ## Pluie
 
-La pluie reste un volume local recyclé autour de la caméra de rendu. Les gouttes sont réutilisées individuellement, ce qui permet de parcourir la scène sans rencontrer la bordure d'un bloc de pluie gigantesque.
+La pluie reste un volume local recyclé autour de la caméra de rendu afin de donner une pluie spatialement continue sans créer des millions de particules sur tout le monde.
+
+## Caméras
+
+Chaque caméra cinématique possède des keyframes de position, rotation, focale, zoom, distance de mise au point, aperture DOF, blur maximal et activation de la profondeur de champ. La piste `CAM CUT` choisit la caméra rendue à chaque instant.
 
 ## Effets localisés
 
-La timeline possède une piste **FX**.
+La piste `FX` supporte actuellement :
 
-### Explosion
-
-Une explosion peut être placée en coordonnées monde ou attachée à un modèle avec un offset local. Elle possède une durée, une taille et une intensité. L'effet procédural combine sprite lumineux, particules et lumière ponctuelle.
-
-### Flamme moteur fusée
-
-Une flamme peut être attachée à un modèle et suit son mouvement et sa rotation. Son offset et sa direction sont exprimés dans le repère local de la cible.
+- explosions localisées, éventuellement attachées à un modèle ;
+- flammes de moteur fusée avec offset et direction exprimés dans le repère local du modèle.
 
 ## GLB / textures
 
-`GLTFLoader` conserve les matériaux PBR et textures du GLB. Les matériaux glTF ne sont pas remplacés par l'éditeur et les textures reçoivent une anisotropie adaptée au GPU.
+`GLTFLoader` conserve les matériaux PBR et textures du GLB. Pour un `.gltf`, sélectionne en une fois le `.gltf`, son `.bin` et ses images. Pour OBJ, sélectionne `.obj`, `.mtl` et textures ensemble.
 
-Pour un `.glb`, sélectionne simplement le fichier. Pour un `.gltf` avec ressources externes, sélectionne en une fois le `.gltf`, son `.bin` et ses images. Pour OBJ, sélectionne `.obj`, `.mtl` et textures ensemble.
-
-> Draco/KTX2 ne sont pas activés pour l'instant afin de conserver la politique réseau minimale.
+Draco/KTX2 ne sont pas activés pour l'instant afin de conserver la politique réseau minimale.
 
 ## Format timeline JSON
 
-Le format courant est `version: 4`. Il ajoute `oceanFollows` aux versions précédentes :
+Le format courant est **version 5**. La version 5 ajoute les références de pose du parent utilisées par les nouvelles liaisons en delta, tout en conservant `oceanFollows`, `cameraCuts` et `effects`.
 
-```json
-{
-  "version": 4,
-  "duration": 12,
-  "loop": false,
-  "tracks": {},
-  "bindings": [],
-  "oceanFollows": [
-    {
-      "id": "sea-...",
-      "objectId": "rocket",
-      "time": 2.0,
-      "enabled": true,
-      "offset": 4.5
-    },
-    {
-      "id": "sea-...",
-      "objectId": "rocket",
-      "time": 7.0,
-      "enabled": false,
-      "offset": 4.5
-    }
-  ],
-  "cameraCuts": [],
-  "effects": []
-}
-```
-
-Les timelines `version: 1`, `2` et `3` restent importables.
+Les versions 1 à 4 restent acceptées à l'import ; une référence de liaison manquante est reconstruite lors de la première évaluation de cette liaison.
 
 ## Architecture
 
 ```text
+viewer.html
 src/
 ├── main.js
+├── detached.js
 ├── styles.css
 ├── ocean-follow.css
 ├── core/
@@ -190,8 +163,10 @@ src/
 │   ├── OceanWorld.js
 │   ├── Rain.js
 │   ├── SceneActor.js
+│   ├── SceneSync.js
 │   ├── SceneTimeline.js
 │   └── Weather.js
 └── editor/
+    ├── BindingOffsetController.js
     └── SceneEditor.js
 ```
